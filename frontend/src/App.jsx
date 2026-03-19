@@ -31,18 +31,42 @@ const OBJECTIVES = [
 
 const CTA_OPTIONS = ["Shop Now","Learn More","Sign Up","Book Now","Download","Get Offer","Subscribe","Contact Us","Apply Now","Order Now","Watch More","Send Message"];
 
-const INDIA_STATES_HIGH_RTO = [
-  "Jammu and Kashmir","Uttar Pradesh","Bihar","Rajasthan","Jharkhand",
-  "Arunachal Pradesh","Assam","Manipur","Meghalaya","Mizoram","Nagaland","Sikkim","Tripura"
+const INDIA_STATES = [
+  { name:"Andhra Pradesh", key:"IN-AP" },
+  { name:"Arunachal Pradesh", key:"IN-AR", rto:true },
+  { name:"Assam", key:"IN-AS", rto:true },
+  { name:"Bihar", key:"IN-BR", rto:true },
+  { name:"Chhattisgarh", key:"IN-CT" },
+  { name:"Delhi", key:"IN-DL" },
+  { name:"Goa", key:"IN-GA" },
+  { name:"Gujarat", key:"IN-GJ" },
+  { name:"Haryana", key:"IN-HR" },
+  { name:"Himachal Pradesh", key:"IN-HP" },
+  { name:"Jammu and Kashmir", key:"IN-JK", rto:true },
+  { name:"Jharkhand", key:"IN-JH", rto:true },
+  { name:"Karnataka", key:"IN-KA" },
+  { name:"Kerala", key:"IN-KL" },
+  { name:"Madhya Pradesh", key:"IN-MP" },
+  { name:"Maharashtra", key:"IN-MH" },
+  { name:"Manipur", key:"IN-MN", rto:true },
+  { name:"Meghalaya", key:"IN-ML", rto:true },
+  { name:"Mizoram", key:"IN-MZ", rto:true },
+  { name:"Nagaland", key:"IN-NL", rto:true },
+  { name:"Odisha", key:"IN-OR" },
+  { name:"Punjab", key:"IN-PB" },
+  { name:"Rajasthan", key:"IN-RJ", rto:true },
+  { name:"Sikkim", key:"IN-SK", rto:true },
+  { name:"Tamil Nadu", key:"IN-TN" },
+  { name:"Telangana", key:"IN-TG" },
+  { name:"Tripura", key:"IN-TR", rto:true },
+  { name:"Uttar Pradesh", key:"IN-UP", rto:true },
+  { name:"Uttarakhand", key:"IN-UT" },
+  { name:"West Bengal", key:"IN-WB" },
+  { name:"Chandigarh", key:"IN-CH" },
+  { name:"Puducherry", key:"IN-PY" },
+  { name:"Ladakh", key:"IN-LA" },
 ];
-
-const ALL_INDIA_STATES = [
-  "Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","Goa","Gujarat",
-  "Haryana","Himachal Pradesh","Jammu and Kashmir","Jharkhand","Karnataka","Kerala",
-  "Madhya Pradesh","Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha",
-  "Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh",
-  "Uttarakhand","West Bengal","Delhi","Chandigarh","Puducherry","Ladakh"
-];
+const INDIA_RTO_STATES = INDIA_STATES.filter(s => s.rto);
 
 const COUNTRIES = [
   { code:"IN", name:"India", flag:"\u{1F1EE}\u{1F1F3}" },
@@ -117,7 +141,7 @@ export default function App() {
   const [cCountry, setCCountry] = useState("IN");
   const [cCustomCountries, setCCustomCountries] = useState([]);
   const [cExcludeRtoStates, setCExcludeRtoStates] = useState(false);
-  const [cExcludedStates, setCExcludedStates] = useState([...INDIA_STATES_HIGH_RTO]);
+  const [cExcludedStates, setCExcludedStates] = useState(INDIA_RTO_STATES.map(s => s.key));
   const [cPixelMode, setCPixelMode] = useState("auto");
   const [cPixelId, setCPixelId] = useState("");
   const [cVerticalScale, setCVerticalScale] = useState(1);
@@ -215,7 +239,7 @@ export default function App() {
     const adSetsForApi = adSets.map(as => {
       const targeting = { geo_locations: { countries: selectedCountries } };
       if (cCountry === "IN" && cExcludeRtoStates && cExcludedStates.length > 0) {
-        targeting.excluded_geo_locations = { regions: cExcludedStates.map(s => ({ key: s, name: s })) };
+        targeting.excluded_geo_locations = { regions: cExcludedStates.map(k => ({ key: k })) };
       }
       if (as.audienceType !== "broad") {
         targeting.age_min = as.ageMin; targeting.age_max = as.ageMax;
@@ -413,12 +437,12 @@ export default function App() {
               <div style={{marginTop:8}}>
                 <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:T.txM}}>
                   <input type="checkbox" checked={cExcludeRtoStates} onChange={e=>setCExcludeRtoStates(e.target.checked)} style={{width:16,height:16,accentColor:T.ac}}/>
-                  Exclude High RTO States (J&K, UP, Bihar, Rajasthan, Jharkhand, North East)
+                  Exclude High RTO States
                 </label>
-                {cExcludeRtoStates&&<div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:8}}>{ALL_INDIA_STATES.map(st=><span key={st} style={S.chip(cExcludedStates.includes(st))} onClick={()=>setCExcludedStates(p=>p.includes(st)?p.filter(x=>x!==st):[...p,st])}>{st}</span>)}</div>}
+                {cExcludeRtoStates&&<div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:8}}>{INDIA_STATES.map(st=><span key={st.key} style={S.chip(cExcludedStates.includes(st.key))} onClick={()=>setCExcludedStates(p=>p.includes(st.key)?p.filter(x=>x!==st.key):[...p,st.key])}>{st.rto?"\u{1F534} ":""}{st.name}</span>)}</div>}
               </div>
             )}
-            <div style={{padding:7,background:"rgba(28,200,138,.06)",borderRadius:6,border:"1px solid rgba(28,200,138,.1)",fontSize:11,color:T.ok,marginTop:8}}>Target: <b>{cCustomCountries.length>0?cCustomCountries.join(", "):(COUNTRIES.find(c=>c.code===cCountry)?.flag+" "+COUNTRIES.find(c=>c.code===cCountry)?.name)}</b>{cExcludeRtoStates&&cCountry==="IN"?" (excluding "+cExcludedStates.length+" states)":""}</div>
+            <div style={{padding:7,background:"rgba(28,200,138,.06)",borderRadius:6,border:"1px solid rgba(28,200,138,.1)",fontSize:11,color:T.ok,marginTop:8}}>Target: <b>{cCustomCountries.length>0?cCustomCountries.join(", "):(COUNTRIES.find(c=>c.code===cCountry)?.flag+" "+COUNTRIES.find(c=>c.code===cCountry)?.name)}</b>{cExcludeRtoStates&&cCountry==="IN"?" (excluding "+cExcludedStates.length+" regions)":""}</div>
           </div>
 
           {/* Pixel */}
