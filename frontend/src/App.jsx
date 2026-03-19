@@ -235,7 +235,7 @@ export default function App() {
 
     const adSetsForApi = adSets.map(as => {
       const targeting = { geo_locations: { countries: selectedCountries } };
-      if (cCountry === "IN" && cExcludeRtoStates && cExcludedStates.length > 0) {
+      if (cExcludedStates.length > 0) {
         targeting.excluded_geo_locations = { regions: cExcludedStates.map(k => ({ key: k })) };
       }
       if (as.audienceType !== "broad") {
@@ -429,16 +429,16 @@ export default function App() {
             </div>
             {cCustomCountries.length>0&&<div style={{marginBottom:8}}><input style={S.inp} placeholder="Type country code (e.g. GB, CA, AU) and press Enter" onKeyDown={e=>{if(e.key==="Enter"&&e.target.value.trim()){setCCustomCountries(p=>[...p,e.target.value.trim().toUpperCase()]);e.target.value=""}}}/><div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>{cCustomCountries.map(cc=><span key={cc} style={S.chip(true)} onClick={()=>setCCustomCountries(p=>p.filter(x=>x!==cc))}>{cc} x</span>)}</div></div>}
 
-            {/* India RTO State Exclusion */}
-            {cCountry==="IN"&&cCustomCountries.length===0&&(
-              <div style={{marginTop:8}}>
-                <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:T.txM}}>
-                  <input type="checkbox" checked={cExcludeRtoStates} onChange={e=>setCExcludeRtoStates(e.target.checked)} style={{width:16,height:16,accentColor:T.ac}}/>
-                  Exclude High RTO States
-                </label>
-                {cExcludeRtoStates&&<div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:8}}>{INDIA_STATES.map(st=><span key={st.key} style={S.chip(cExcludedStates.includes(st.key))} onClick={()=>setCExcludedStates(p=>p.includes(st.key)?p.filter(x=>x!==st.key):[...p,st.key])}>{st.rto?"\u{1F534} ":""}{st.name}</span>)}</div>}
+            {/* Custom Region Exclusion */}
+            <div style={{marginTop:8}}>
+              <label style={S.lbl}>Exclude Regions (optional)</label>
+              <div style={{display:"flex",gap:6,marginBottom:8}}>
+                <button style={{...S.btn(cExcludeRtoStates?"primary":"ghost"),fontSize:11,padding:"6px 12px"}} onClick={()=>{setCExcludeRtoStates(true);setCExcludedStates(INDIA_RTO_STATES.map(s=>s.key))}}>Quick: Exclude High RTO States</button>
+                <button style={{...S.btn(!cExcludeRtoStates&&cExcludedStates.length>0?"primary":"ghost"),fontSize:11,padding:"6px 12px"}} onClick={()=>{setCExcludeRtoStates(false);setCExcludedStates([])}}>Clear All</button>
               </div>
-            )}
+              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{INDIA_STATES.map(st=><span key={st.key} style={{...S.chip(cExcludedStates.includes(st.key)),fontSize:10.5}} onClick={()=>setCExcludedStates(p=>p.includes(st.key)?p.filter(x=>x!==st.key):[...p,st.key])}>{cExcludedStates.includes(st.key)?"x ":""}{st.name}</span>)}</div>
+              {cExcludedStates.length>0&&<div style={{marginTop:6,padding:7,background:"rgba(231,74,59,.06)",borderRadius:6,fontSize:11,color:T.err}}>Excluding {cExcludedStates.length} regions from targeting</div>}
+            </div>
             <div style={{padding:7,background:"rgba(28,200,138,.06)",borderRadius:6,border:"1px solid rgba(28,200,138,.1)",fontSize:11,color:T.ok,marginTop:8}}>Target: <b>{cCustomCountries.length>0?cCustomCountries.join(", "):(COUNTRIES.find(c=>c.code===cCountry)?.flag+" "+COUNTRIES.find(c=>c.code===cCountry)?.name)}</b>{cExcludeRtoStates&&cCountry==="IN"?" (excluding "+cExcludedStates.length+" regions)":""}</div>
           </div>
 
