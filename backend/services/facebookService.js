@@ -267,7 +267,7 @@ class FacebookService {
       name: data.name || "Ad Set",
       targeting: targeting,
       billing_event: "IMPRESSIONS",
-      optimization_goal: optMap[data.objective] || "LINK_CLICKS",
+      optimization_goal: optMap[data.objective] || "OFFSITE_CONVERSIONS",
       status: data.status || "PAUSED",
       // Also send as top-level param (some API versions need this)
       targeting_automation: { advantage_audience: 1 },
