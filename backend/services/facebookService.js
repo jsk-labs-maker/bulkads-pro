@@ -233,6 +233,11 @@ class FacebookService {
       targeting.geo_locations = { countries: ["US"] };
     }
 
+    // Pass through excluded regions (e.g. high RTO Indian states)
+    if (data.targeting?.excluded_geo_locations) {
+      targeting.excluded_geo_locations = data.targeting.excluded_geo_locations;
+    }
+
     // Age
     if (data.targeting?.age_min) targeting.age_min = data.targeting.age_min;
     if (data.targeting?.age_max) targeting.age_max = data.targeting.age_max;
