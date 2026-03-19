@@ -282,7 +282,7 @@ class FacebookService {
     } else if (needsPixel && !data.pixel_id) {
       // No pixel — switch to link clicks so it doesn't fail
       logger.warn(`No pixel for ${id}, switching to LINK_CLICKS optimization`);
-      params.optimization_goal = "LINK_CLICKS";
+      // Keep OFFSITE_CONVERSIONS even without pixel - Facebook will still try to optimize for conversions
     }
 
     // NO budget here when CBO — budget on ad set only for ABO
