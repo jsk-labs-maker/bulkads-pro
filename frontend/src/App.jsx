@@ -86,6 +86,7 @@ export default function App() {
   const [sbOpen, setSbOpen] = useState(true);
   const [notif, setNotif] = useState(null);
   const flash = (m, t = "success") => { setNotif({ m, t }); setTimeout(() => setNotif(null), 3500); };
+  const addLog = (type, msg, detail="") => setLogs(p => [{ts: new Date().toLocaleTimeString(), type, msg, detail}, ...p].slice(0, 500));
 
   /* ── FB API — manual entry with localStorage ── */
   const [fbToken, setFbToken] = useState(() => localStorage.getItem("fb_token") || "");
@@ -141,6 +142,7 @@ export default function App() {
 
   /* ── Campaigns history ── */
   const [campaigns, setCampaigns] = useState([]);
+  const [logs, setLogs] = useState([]);
   const [savedGroups, setSavedGroups] = useState([]);
   const [showNewGrp, setShowNewGrp] = useState(false);
   const [newGrpName, setNewGrpName] = useState("");
@@ -161,7 +163,8 @@ export default function App() {
         await fetchAccounts();
         await fetchPages();
         flash("Connected! " + status.accounts_count + " accounts found");
-      } else { setApiError(status.error || "Connection failed"); }
+        addLog("success", "API Connected", status.accounts_count + " accounts found");
+      } else { setApiError(status.error || "Connection failed"); addLog("error", "Connection failed", status.error || "Unknown"); }
     } catch (e) { setApiError(e.message || "Connection failed"); }
     setApiLoading(false);
   };
@@ -256,7 +259,8 @@ export default function App() {
         accountCount: selAccounts.length, successCount: ok, failCount: fail,
       });
       flash(ok + " success, " + fail + " failed");
-    } catch (e) { setPubDone(true); flash("Publish failed: " + (e.message || "Unknown"), "error"); }
+      allResults.forEach(r => { if (r.success) addLog("success", "Published to " + r.accountId, (r.data?.ad_sets||1) + " ad sets, " + (r.data?.total_ads||1) + " ads"); else addLog("error", "Failed: " + r.accountId, r.error || r.errorDetail || "Unknown error"); });
+    } catch (e) { setPubDone(true); flash("Publish failed: " + (e.message || "Unknown"), "error"); addLog("error", "Publish crashed", e.message || "Unknown"); }
     setPublishing(false);
   };
 
@@ -350,9 +354,10 @@ export default function App() {
     { id:"create", icon:"plus", label:"Create Campaign" },
     { id:"campaigns", icon:"list", label:"Campaigns" },
     { id:"accounts", icon:"users", label:"Ad Accounts" },
+    { id:"logs", icon:"list", label:"Logs" },
     { id:"settings", icon:"gear", label:"API Settings" },
   ];
-  const titles = { dashboard:"Dashboard", create:"Create Campaign", campaigns:"Campaigns", accounts:"Ad Accounts", settings:"API Settings" };
+  const titles = { dashboard:"Dashboard", create:"Create Campaign", campaigns:"Campaigns", accounts:"Ad Accounts", logs:"System Logs", settings:"API Settings" };
 
   /* ═══ PAGES ═══ */
 
@@ -621,7 +626,31 @@ export default function App() {
     </div>
   );
 
-  const pages = { dashboard:renderDashboard, create:renderCreate, campaigns:renderCampaigns, accounts:renderAccounts, settings:renderSettings };
+  const renderLogs = () => (
+    <div style={S.ct}>
+      <div style={S.card}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
+          <div style={S.cardT}>System Logs ({logs.length})</div>
+          <div style={{display:"flex",gap:6}}>
+            <button style={S.btn("ghost")} onClick={()=>setLogs(p=>p.filter(l=>l.type==="error"))}>Errors Only</button>
+            <button style={S.btn("danger")} onClick={()=>setLogs([])}>Clear</button>
+          </div>
+        </div>
+        {logs.length===0?<div style={{textAlign:"center",padding:32,color:T.txD}}>No logs yet. Logs appear when you connect API or publish campaigns.</div>:
+        <div style={{maxHeight:500,overflowY:"auto"}}>{logs.map((l,i)=>(
+          <div key={i} style={{display:"flex",gap:10,padding:"8px 12px",borderRadius:5,marginBottom:2,background:l.type==="error"?"rgba(231,74,59,.04)":l.type==="success"?"rgba(28,200,138,.04)":"rgba(45,127,249,.04)",borderLeft:l.type==="error"?"3px solid "+T.err:l.type==="success"?"3px solid "+T.ok:"3px solid "+T.ac,fontSize:12}}>
+            <div style={{color:T.txD,fontFamily:"'JetBrains Mono',monospace",fontSize:10,minWidth:70,paddingTop:2}}>{l.ts}</div>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,color:l.type==="error"?T.err:l.type==="success"?T.ok:T.ac}}>{l.msg}</div>
+              {l.detail&&<div style={{color:T.txM,fontSize:11,marginTop:2,fontFamily:"'JetBrains Mono',monospace",wordBreak:"break-all"}}>{l.detail}</div>}
+            </div>
+          </div>
+        ))}</div>}
+      </div>
+    </div>
+  );
+
+  const pages = { dashboard:renderDashboard, create:renderCreate, campaigns:renderCampaigns, accounts:renderAccounts, logs:renderLogs, settings:renderSettings };
 
   return (
     <div style={S.layout}>
