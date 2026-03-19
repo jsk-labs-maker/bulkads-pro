@@ -31,39 +31,8 @@ const OBJECTIVES = [
 
 const CTA_OPTIONS = ["Shop Now","Learn More","Sign Up","Book Now","Download","Get Offer","Subscribe","Contact Us","Apply Now","Order Now","Watch More","Send Message"];
 
-const INDIA_STATES = [
-  { name:"Andhra Pradesh", key:"2001" },
-  { name:"Arunachal Pradesh", key:"2003", rto:true },
-  { name:"Assam", key:"2004", rto:true },
-  { name:"Bihar", key:"2005", rto:true },
-  { name:"Chhattisgarh", key:"2007" },
-  { name:"Delhi", key:"2009" },
-  { name:"Goa", key:"2010" },
-  { name:"Gujarat", key:"2011" },
-  { name:"Haryana", key:"2013" },
-  { name:"Himachal Pradesh", key:"2015" },
-  { name:"Jammu and Kashmir", key:"2012", rto:true },
-  { name:"Jharkhand", key:"2014", rto:true },
-  { name:"Karnataka", key:"2016" },
-  { name:"Kerala", key:"2017" },
-  { name:"Madhya Pradesh", key:"2019" },
-  { name:"Maharashtra", key:"2020" },
-  { name:"Manipur", key:"2018", rto:true },
-  { name:"Meghalaya", key:"2021", rto:true },
-  { name:"Mizoram", key:"2022", rto:true },
-  { name:"Nagaland", key:"2023", rto:true },
-  { name:"Odisha", key:"2024" },
-  { name:"Punjab", key:"2025" },
-  { name:"Rajasthan", key:"2026", rto:true },
-  { name:"Sikkim", key:"2027", rto:true },
-  { name:"Tamil Nadu", key:"2030" },
-  { name:"Telangana", key:"2034" },
-  { name:"Tripura", key:"2033", rto:true },
-  { name:"Uttar Pradesh", key:"2028", rto:true },
-  { name:"Uttarakhand", key:"2029" },
-  { name:"West Bengal", key:"2032" },
-];
-const INDIA_RTO_STATES = INDIA_STATES.filter(s => s.rto);
+
+
 
 const COUNTRIES = [
   { code:"IN", name:"India", flag:"\u{1F1EE}\u{1F1F3}" },
@@ -138,7 +107,7 @@ export default function App() {
   const [cCountry, setCCountry] = useState("IN");
   const [cCustomCountries, setCCustomCountries] = useState([]);
   const [cExcludeRtoStates, setCExcludeRtoStates] = useState(false);
-  const [cExcludedStates, setCExcludedStates] = useState(INDIA_RTO_STATES.map(s => s.key));
+  const [cExcludedStates, setCExcludedStates] = useState([]);
   const [cPixelMode, setCPixelMode] = useState("auto");
   const [cPixelId, setCPixelId] = useState("");
   const [cVerticalScale, setCVerticalScale] = useState(1);
@@ -306,7 +275,7 @@ export default function App() {
     setAdCopy({ primaryText:"", headline:"", description:"", cta:"Shop Now", url:"" });
     setAdSets([{ id:1, name:"Broad", audienceType:"broad", ageMin:18, ageMax:65, gender:"all", interests:[], budget:"50" }]);
     setActiveAdSet(1); setSelAccounts([]); setCBudgetMode("CBO"); setCVerticalScale(1);
-    setCCountry("IN"); setCCustomCountries([]); setCExcludeRtoStates(false); setCPixelMode("auto"); setCPixelId("");
+    setCCountry("IN"); setCCustomCountries([]); setCPixelMode("auto"); setCPixelId("");
     setPublishing(false); setPubDone(false); setPubProgress(0); setPubResults(null); setWsResults([]);
   };
 
@@ -429,15 +398,13 @@ export default function App() {
             </div>
             {cCustomCountries.length>0&&<div style={{marginBottom:8}}><input style={S.inp} placeholder="Type country code (e.g. GB, CA, AU) and press Enter" onKeyDown={e=>{if(e.key==="Enter"&&e.target.value.trim()){setCCustomCountries(p=>[...p,e.target.value.trim().toUpperCase()]);e.target.value=""}}}/><div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>{cCustomCountries.map(cc=><span key={cc} style={S.chip(true)} onClick={()=>setCCustomCountries(p=>p.filter(x=>x!==cc))}>{cc} x</span>)}</div></div>}
 
-            {/* Custom Region Exclusion */}
+            {/* Custom Search Exclude */}
             <div style={{marginTop:8}}>
-              <label style={S.lbl}>Exclude Regions (optional)</label>
-              <div style={{display:"flex",gap:6,marginBottom:8}}>
-                <button style={{...S.btn(cExcludeRtoStates?"primary":"ghost"),fontSize:11,padding:"6px 12px"}} onClick={()=>{setCExcludeRtoStates(true);setCExcludedStates(INDIA_RTO_STATES.map(s=>s.key))}}>Quick: Exclude High RTO States</button>
-                <button style={{...S.btn(!cExcludeRtoStates&&cExcludedStates.length>0?"primary":"ghost"),fontSize:11,padding:"6px 12px"}} onClick={()=>{setCExcludeRtoStates(false);setCExcludedStates([])}}>Clear All</button>
-              </div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{INDIA_STATES.map(st=><span key={st.key} style={{...S.chip(cExcludedStates.includes(st.key)),fontSize:10.5}} onClick={()=>setCExcludedStates(p=>p.includes(st.key)?p.filter(x=>x!==st.key):[...p,st.key])}>{cExcludedStates.includes(st.key)?"x ":""}{st.name}</span>)}</div>
-              {cExcludedStates.length>0&&<div style={{marginTop:6,padding:7,background:"rgba(231,74,59,.06)",borderRadius:6,fontSize:11,color:T.err}}>Excluding {cExcludedStates.length} regions from targeting</div>}
+              <label style={S.lbl}>Exclude Locations (search to add)</label>
+              <input style={S.inp} placeholder="Search city, state, or region to exclude..." value={excludeSearch} onChange={e=>{setExcludeSearch(e.target.value);searchExcludeLocations(e.target.value)}}/>
+              {excludeResults.length>0&&<div style={{marginTop:6,padding:8,background:"rgba(255,255,255,.02)",borderRadius:6,border:"1px solid "+T.bd,maxHeight:160,overflowY:"auto"}}>{excludeResults.map(r=><div key={r.key} className="hr" style={{padding:"6px 10px",borderRadius:4,cursor:"pointer",fontSize:12,display:"flex",justifyContent:"space-between"}} onClick={()=>{setCExcludedStates(p=>[...p,{key:r.key,name:r.name,type:r.type}]);setExcludeResults([]);setExcludeSearch("")}}><span>{r.name}</span><span style={{fontSize:10,color:T.txD}}>{r.type}</span></div>)}</div>}
+              {cExcludedStates.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:8}}>{cExcludedStates.map((s,i)=><span key={i} style={S.chip(true)} onClick={()=>setCExcludedStates(p=>p.filter((_,j)=>j!==i))}>{typeof s==="object"?s.name:s} x</span>)}</div>}
+              {cExcludedStates.length>0&&<div style={{marginTop:6,padding:7,background:"rgba(231,74,59,.06)",borderRadius:6,fontSize:11,color:T.err}}>Excluding {cExcludedStates.length} locations</div>}
             </div>
             <div style={{padding:7,background:"rgba(28,200,138,.06)",borderRadius:6,border:"1px solid rgba(28,200,138,.1)",fontSize:11,color:T.ok,marginTop:8}}>Target: <b>{cCustomCountries.length>0?cCustomCountries.join(", "):(COUNTRIES.find(c=>c.code===cCountry)?.flag+" "+COUNTRIES.find(c=>c.code===cCountry)?.name)}</b>{cExcludeRtoStates&&cCountry==="IN"?" (excluding "+cExcludedStates.length+" regions)":""}</div>
           </div>
