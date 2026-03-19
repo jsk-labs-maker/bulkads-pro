@@ -16,6 +16,7 @@ const analyticsRoutes = require("./routes/analytics");
 const dbRoutes = require("./routes/db");
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 5000;
 
 app.use(helmet({ contentSecurityPolicy: false }));
