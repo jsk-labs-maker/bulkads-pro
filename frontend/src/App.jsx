@@ -107,6 +107,8 @@ export default function App() {
   const [cCountry, setCCountry] = useState("IN");
   const [cCustomCountries, setCCustomCountries] = useState([]);
   const [cExcludeRtoStates, setCExcludeRtoStates] = useState(false);
+  const [excludeSearch, setExcludeSearch] = useState('');
+  const [excludeResults, setExcludeResults] = useState([]);
   const [cExcludedStates, setCExcludedStates] = useState([]);
   const [cPixelMode, setCPixelMode] = useState("auto");
   const [cPixelId, setCPixelId] = useState("");
@@ -186,6 +188,14 @@ export default function App() {
 
   const loadCampaigns = async () => { try { const r = await api.get("/api/db/campaigns"); if (r.success) setCampaigns(r.campaigns); } catch (e) {} };
   const loadGroups = async () => { try { const r = await api.get("/api/db/groups"); if (r.success) setSavedGroups(r.groups); } catch (e) {} };
+
+  const searchExcludeLocations = async (q) => {
+    if (q.length < 2) { setExcludeResults([]); return; }
+    try {
+      const r = await api.get("/api/campaigns/location-search?q=" + encodeURIComponent(q) + "&country=" + cCountry);
+      if (r.success) setExcludeResults(r.locations || []);
+    } catch (e) { setExcludeResults([]); }
+  };
 
   const searchInterests = async (q) => {
     if (q.length < 2) { setInterestResults([]); return; }
