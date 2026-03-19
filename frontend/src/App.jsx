@@ -14,8 +14,8 @@ import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 const API = ""; // Uses Vite proxy to localhost:5000
 
 /* ── API Helper ── */
-const FB_TOKEN = "EAAmtrIU2PbkBQ4lUEsLZAhM8A8OxALhLOXNKlW2KJqpEg3cCy3GV3PxMvMUK7N4HmAfwEAZBXipJtD11CbmhqW5vJICHpKtmwoyvQSsZAgY93yVsaZCR1W0xcv2B6KY8FYbK6ufieaGJc4ZCALXHUFasOHt3rC3rLZBZCK1ictL5zhYMzXjSvV2V5Dd7OElM0LEBgZDZD";
-const FB_BIZ_ID = "644141538776203";
+const FB_TOKEN = "";
+const FB_BIZ_ID = "";
 
 const api = {
   token: FB_TOKEN, bizId: FB_BIZ_ID,
@@ -149,13 +149,13 @@ export default function App() {
   const flash = (m, t = "success") => { setNotif({ m, t }); setTimeout(() => setNotif(null), 3500); };
 
   /* ─── FB API Connection (hardcoded for quick access) ─── */
-  const [fbToken, setFbToken] = useState(FB_TOKEN);
-  const [fbBizId, setFbBizId] = useState(FB_BIZ_ID);
-  const [fbAppId, setFbAppId] = useState("2724231271300537");
-  const [fbAppSecret, setFbAppSecret] = useState("468328ac4ae2af1a2152d46d8e05558d");
+  const [fbToken, setFbToken] = useState(() => localStorage.getItem("fb_token") || "");
+  const [fbBizId, setFbBizId] = useState(() => localStorage.getItem("fb_biz_id") || "");
+  const [fbAppId, setFbAppId] = useState(() => localStorage.getItem("fb_app_id") || "");
+  const [fbAppSecret, setFbAppSecret] = useState(() => localStorage.getItem("fb_app_secret") || "");
   const [showToken, setShowToken] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
-  const [apiConnected, setApiConnected] = useState(true);
+  const [apiConnected, setApiConnected] = useState(false);
   const [apiLoading, setApiLoading] = useState(false);
   const [apiError, setApiError] = useState("");
 
@@ -241,15 +241,13 @@ export default function App() {
       const status = await api.get("/api/auth/status");
       if (status.connected) {
         setApiConnected(true);
-        // Save to localStorage so it persists on refresh
         localStorage.setItem("fb_token", fbToken);
         localStorage.setItem("fb_biz_id", fbBizId);
         localStorage.setItem("fb_app_id", fbAppId);
         localStorage.setItem("fb_app_secret", fbAppSecret);
         await fetchAccounts();
         await fetchPages();
-        await api.post("/api/db/credentials", { businessId: fbBizId, appId: fbAppId, systemUserToken: fbToken, appSecret: fbAppSecret });
-        flash(`Connected! ${status.accounts_count} accounts found`);
+        flash("Connected! " + status.accounts_count + " accounts found");
       } else { setApiError(status.error || "Connection failed"); }
     } catch (e) { setApiError(e.message || "Connection failed"); }
     setApiLoading(false);
@@ -263,11 +261,16 @@ export default function App() {
     flash("Disconnected", "info"); 
   };
 
-  // Auto-connect on page load — always connects with hardcoded credentials
+  // Auto-connect on page load if credentials saved in localStorage
   useEffect(() => {
-    api.token = FB_TOKEN; api.bizId = FB_BIZ_ID;
-    fetchAccounts();
-    fetchPages();
+    const savedToken = localStorage.getItem("fb_token");
+    const savedBizId = localStorage.getItem("fb_biz_id");
+    if (savedToken && savedBizId) {
+      api.token = savedToken; api.bizId = savedBizId;
+      setApiConnected(true);
+      fetchAccounts();
+      fetchPages();
+    }
     loadTemplates();
     loadCampaigns();
     loadGroups();
