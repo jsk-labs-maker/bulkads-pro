@@ -57,4 +57,30 @@ router.get("/interests", async (req, res) => {
   } catch (e) { res.json({ success: false, interests: [], error: e.message }); }
 });
 
+router.get("/location-search", async (req, res) => {
+  try {
+    const q = req.query.q;
+    const country = req.query.country || "IN";
+    if (!q || q.length < 2) return res.json({ success: true, locations: [] });
+    const facebookService = require("../services/facebookService");
+    const results = await facebookService.graphRequest("GET", "/search", {
+      type: "adgeolocation",
+      q: q,
+      location_types: ["region","city","zip"],
+      country_code: country,
+      limit: 15,
+    }, req.fbToken);
+    const locations = (results.data || []).map(r => ({
+      key: r.key,
+      name: r.name,
+      type: r.type,
+      country_name: r.country_name || "",
+      region: r.region || "",
+    }));
+    res.json({ success: true, locations });
+  } catch (e) {
+    res.json({ success: false, locations: [], error: e.message });
+  }
+});
+
 module.exports = router;
