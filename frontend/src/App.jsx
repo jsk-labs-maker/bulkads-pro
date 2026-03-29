@@ -288,6 +288,10 @@ export default function App() {
   const [cUseLocation, setCUseLocation] = useState(true);
   const [cPixelMode, setCPixelMode] = useState("auto");
   const [cPixelId, setCPixelId] = useState("");
+  const [cExcludedRegions, setCExcludedRegions] = useState([]);
+  const [excludeSearch, setExcludeSearch] = useState("");
+  const [excludeResults, setExcludeResults] = useState([]);
+  const excludeDebounce = useRef(null);
   const [creatives, setCreatives] = useState([]);
   const [creativeFiles, setCreativeFiles] = useState([]);
   const [adCopy, setAdCopy] = useState({ primaryText: "", headline: "", description: "", cta: "Shop Now", url: "" });
@@ -311,6 +315,13 @@ export default function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const [wsResults, setWsResults] = useState([]);
   const wsRef = useRef(null);
+
+  /* ── Analytics ── */
+  const [analyticsData, setAnalyticsData] = useState([]);
+  const [dailyData, setDailyData] = useState([]);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsPreset, setAnalyticsPreset] = useState("last_7d");
+  const [activeSpend, setActiveSpend] = useState({ accounts: [], total: 0 });
 
   /* ── Groups ── */
   const [newGrpName, setNewGrpName] = useState("");
@@ -483,6 +494,49 @@ export default function App() {
   }, [aiUrl, cObj, flash]);
 
   /* ══════════════════════════════════════
+     EXCLUDE LOCATION SEARCH
+     ══════════════════════════════════════ */
+  const searchExcludeLocations = useCallback((q) => {
+    if (excludeDebounce.current) clearTimeout(excludeDebounce.current);
+    if (q.length < 2) { setExcludeResults([]); return; }
+    excludeDebounce.current = setTimeout(async () => {
+      try {
+        const r = await api.get(`/api/accounts/geo-search?q=${encodeURIComponent(q)}&type=region`);
+        if (r.success) setExcludeResults(r.locations);
+      } catch (_) {}
+    }, 350);
+  }, []);
+
+  /* ══════════════════════════════════════
+     ANALYTICS
+     ══════════════════════════════════════ */
+  const fetchAnalytics = useCallback(async (preset) => {
+    if (accounts.length === 0) return;
+    setAnalyticsLoading(true);
+    const activeIds = accounts.filter(a => a.status === "active").slice(0, 5).map(a => a.account_id || a.id.replace("act_", ""));
+    if (activeIds.length === 0) { setAnalyticsLoading(false); return; }
+    try {
+      const [overview, daily] = await Promise.all([
+        api.get(`/api/analytics/overview?account_ids=${activeIds.join(",")}&date_preset=${preset || analyticsPreset}`),
+        api.get(`/api/analytics/daily?account_ids=${activeIds.join(",")}&date_preset=${preset || analyticsPreset}`),
+      ]);
+      if (overview.success) setAnalyticsData(overview.results);
+      if (daily.success) setDailyData(daily.daily);
+    } catch (_) {}
+    setAnalyticsLoading(false);
+  }, [accounts, analyticsPreset]);
+
+  const fetchActiveSpend = useCallback(async () => {
+    if (accounts.length === 0) return;
+    const activeIds = accounts.filter(a => a.status === "active").slice(0, 20).map(a => a.account_id || a.id.replace("act_", ""));
+    if (activeIds.length === 0) return;
+    try {
+      const r = await api.get(`/api/analytics/active-spend?account_ids=${activeIds.join(",")}`);
+      if (r.success) setActiveSpend({ accounts: r.accounts, total: r.total_spend_today });
+    } catch (_) {}
+  }, [accounts]);
+
+  /* ══════════════════════════════════════
      CAMPAIGN BUILDER LOGIC
      ══════════════════════════════════════ */
   const curAdSet = adSets.find(a => a.id === activeAdSet) || adSets[0];
@@ -538,6 +592,7 @@ export default function App() {
     setAdSets([{ id: 1, name: "Broad", audienceType: "broad", ageMin: 18, ageMax: 65, gender: "all", interests: [], budget: "50" }]);
     setActiveAdSet(1); setSelAccounts([]); setCBudgetMode("CBO");
     setCCountries(["IN"]); setCUseLocation(true); setCPixelMode("auto"); setCPixelId("");
+    setCExcludedRegions([]); setExcludeSearch(""); setExcludeResults([]);
     setPublishing(false); setPubDone(false); setPubProgress(0); setPubResults(null); setWsResults([]);
     setAiVariations([]); setAiUrl("");
   };
@@ -582,6 +637,11 @@ export default function App() {
 
       // Location — REQUIRED by Facebook. Always send at least one country.
       targeting.geo_locations = { countries: cCountries.length > 0 ? cCountries : ["IN"] };
+
+      // Excluded locations
+      if (cExcludedRegions.length > 0) {
+        targeting.excluded_geo_locations = { regions: cExcludedRegions.map(r => ({ key: r.key })) };
+      }
 
       if (as.audienceType !== "broad") {
         targeting.age_min = as.ageMin;
@@ -902,6 +962,58 @@ export default function App() {
             )}
           </div>
 
+          {/* Exclude Locations */}
+          <div style={{ borderTop: `1px solid ${T.bd}`, paddingTop: 16, marginTop: 16 }}>
+            <label style={S.lbl}>Exclude Locations (Optional)</label>
+            <div style={{ fontSize: 11.5, color: T.txM, marginBottom: 8 }}>Exclude specific regions/states from targeting (e.g. high-RTO areas)</div>
+            <input style={S.inp} value={excludeSearch} onChange={e => { setExcludeSearch(e.target.value); searchExcludeLocations(e.target.value); }} placeholder="Search regions to exclude (e.g. Jammu, Kashmir, Northeast)..." />
+            {excludeResults.length > 0 && (
+              <div style={{ marginTop: 6, padding: 8, background: "rgba(255,255,255,.02)", borderRadius: 8, border: `1px solid ${T.bd}`, maxHeight: 160, overflowY: "auto" }}>
+                {excludeResults.map(l => (
+                  <div key={l.key} className="hr" style={{ padding: "7px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12, display: "flex", justifyContent: "space-between" }}
+                    onClick={() => {
+                      if (!cExcludedRegions.some(r => r.key === l.key)) {
+                        setCExcludedRegions(p => [...p, l]);
+                      }
+                      setExcludeResults([]); setExcludeSearch("");
+                    }}>
+                    <span>{l.name}</span>
+                    <span style={{ fontSize: 10, color: T.txD }}>{l.country_name} ({l.type})</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {cExcludedRegions.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
+                {cExcludedRegions.map(r => (
+                  <Chip key={r.key} selected onClick={() => setCExcludedRegions(p => p.filter(x => x.key !== r.key))}>
+                    {r.name} ({r.country_code}) x
+                  </Chip>
+                ))}
+                <span style={{ cursor: "pointer", fontSize: 11, color: T.err, padding: "5px 8px" }} onClick={() => setCExcludedRegions([])}>Clear all</span>
+              </div>
+            )}
+            {/* Quick presets for India */}
+            {cCountries.includes("IN") && cExcludedRegions.length === 0 && (
+              <div style={{ marginTop: 8 }}>
+                <Btn variant="ghost" style={{ fontSize: 11, padding: "5px 10px" }} onClick={() => {
+                  setCExcludedRegions([
+                    { key: "1732", name: "Jammu and Kashmir", country_code: "IN", type: "region" },
+                    { key: "1738", name: "Manipur", country_code: "IN", type: "region" },
+                    { key: "1739", name: "Meghalaya", country_code: "IN", type: "region" },
+                    { key: "1740", name: "Mizoram", country_code: "IN", type: "region" },
+                    { key: "1741", name: "Nagaland", country_code: "IN", type: "region" },
+                    { key: "1746", name: "Tripura", country_code: "IN", type: "region" },
+                    { key: "1722", name: "Arunachal Pradesh", country_code: "IN", type: "region" },
+                  ]);
+                  flash("Excluded high-RTO regions (J&K + Northeast)");
+                }}>
+                  Exclude High-RTO India Regions (J&K + Northeast)
+                </Btn>
+              </div>
+            )}
+          </div>
+
           {/* Pixel — only for conversion-based objectives */}
           {["conversions", "sales", "leads"].includes(cObj) && (
             <div style={{ borderTop: `1px solid ${T.bd}`, paddingTop: 16, marginTop: 16 }}>
@@ -1008,6 +1120,63 @@ export default function App() {
             <div style={S.col()}><label style={S.lbl}>CTA Button</label><select style={S.sel} value={adCopy.cta} onChange={e => setAdCopy(p => ({ ...p, cta: e.target.value }))}>{CTA_OPTIONS.map(c => <option key={c}>{c}</option>)}</select></div>
             <div style={S.col()}><label style={S.lbl}>Website URL *</label><input style={S.inp} value={adCopy.url} onChange={e => setAdCopy(p => ({ ...p, url: e.target.value }))} placeholder="https://yoursite.com" /></div>
           </div>
+
+          {/* Ad Preview */}
+          {(adCopy.primaryText || adCopy.headline) && (
+            <div style={{ marginTop: 18 }}>
+              <label style={S.lbl}>Ad Preview</label>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                {/* Facebook Feed Preview */}
+                <div style={{ flex: "1 1 300px", maxWidth: 380, background: "#1c1c1c", borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.08)" }}>
+                  <div style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: "50%", background: T.fb, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700 }}>
+                      {(fbPages.find(p => p.id === cPageId)?.name || "Page").charAt(0)}
+                    </div>
+                    <div><div style={{ fontSize: 12, fontWeight: 600, color: "#e4e6eb" }}>{fbPages.find(p => p.id === cPageId)?.name || "Your Page"}</div><div style={{ fontSize: 10, color: "#b0b3b8" }}>Sponsored</div></div>
+                  </div>
+                  <div style={{ padding: "0 12px 8px", fontSize: 13, color: "#e4e6eb", lineHeight: 1.5 }}>{adCopy.primaryText || "Your ad text here..."}</div>
+                  {creatives.length > 0 && (
+                    <div style={{ width: "100%", aspectRatio: "1.91/1", background: "#2d2d2d", overflow: "hidden" }}>
+                      {creatives[0].type === "image" ? <img src={creatives[0].preview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <video src={creatives[0].preview} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                    </div>
+                  )}
+                  {!creatives.length && <div style={{ width: "100%", aspectRatio: "1.91/1", background: "#2d2d2d", display: "flex", alignItems: "center", justifyContent: "center", color: "#666", fontSize: 12 }}>Your creative here</div>}
+                  <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,.05)" }}>
+                    <div style={{ fontSize: 10, color: "#b0b3b8", marginBottom: 2 }}>{adCopy.url ? new URL(adCopy.url).hostname : "yoursite.com"}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div><div style={{ fontSize: 13, fontWeight: 600, color: "#e4e6eb" }}>{adCopy.headline || "Your Headline"}</div>{adCopy.description && <div style={{ fontSize: 11, color: "#b0b3b8" }}>{adCopy.description}</div>}</div>
+                      <div style={{ padding: "6px 14px", borderRadius: 6, background: "#e4e6eb", color: "#050505", fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap" }}>{adCopy.cta || "Learn More"}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Instagram Feed Preview */}
+                <div style={{ flex: "1 1 260px", maxWidth: 320, background: "#000", borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.08)" }}>
+                  <div style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 28, height: 28, borderRadius: "50%", background: "linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, fontWeight: 700 }}>
+                      {(fbPages.find(p => p.id === cPageId)?.name || "P").charAt(0)}
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{(fbPages.find(p => p.id === cPageId)?.name || "page").toLowerCase().replace(/\s+/g, "")}</div>
+                    <span style={{ fontSize: 10, color: "#a8a8a8", marginLeft: 4 }}>Sponsored</span>
+                  </div>
+                  {creatives.length > 0 ? (
+                    <div style={{ width: "100%", aspectRatio: "1", overflow: "hidden" }}>
+                      {creatives[0].type === "image" ? <img src={creatives[0].preview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <video src={creatives[0].preview} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                    </div>
+                  ) : <div style={{ width: "100%", aspectRatio: "1", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", color: "#444", fontSize: 11 }}>Creative</div>}
+                  <div style={{ padding: "8px 12px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#fff" }}>{adCopy.headline || "Headline"}</span>
+                      <span style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #fff", color: "#fff", fontSize: 10, fontWeight: 600 }}>{adCopy.cta || "Learn More"}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: "#e4e6eb", lineHeight: 1.4 }}>
+                      <b style={{ color: "#fff" }}>{(fbPages.find(p => p.id === cPageId)?.name || "page").toLowerCase().replace(/\s+/g, "")}</b>{" "}{(adCopy.primaryText || "").slice(0, 100)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ),
 
@@ -1239,7 +1408,8 @@ export default function App() {
                 { l: "Objective", v: obj?.label || cObj },
                 { l: "Budget", v: `$${cBudget} ${cBudgetType} (${cBudgetMode})` },
                 { l: "Page", v: fbPages.find(p => p.id === cPageId)?.name || cPageId },
-                { l: "Location", v: cCountries.length > 0 ? cCountries.map(c => COUNTRIES.find(x => x.code === c)?.name || c).join(", ") : "India" },
+                { l: "Location", v: cCountries.map(c => COUNTRIES.find(x => x.code === c)?.name || c).join(", ") },
+                { l: "Excluded", v: cExcludedRegions.length > 0 ? cExcludedRegions.map(r => r.name).join(", ") : "None" },
                 { l: "Creatives", v: creativeFiles.length },
                 { l: "Ad Sets", v: adSets.map(a => a.name).join(", ") },
                 { l: "Ads per Account", v: totalAdsPerAccount },
@@ -1385,34 +1555,150 @@ export default function App() {
             <div style={S.cardT}>All Ad Accounts ({accounts.length})</div>
             <Btn variant="ghost" onClick={fetchAccounts} disabled={accLoading}><Ic t="refresh" sz={13} /> {accLoading ? "Syncing..." : "Refresh"}</Btn>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 80px 70px 70px", gap: 8, padding: "5px 14px", fontSize: 10, textTransform: "uppercase", letterSpacing: ".5px", color: T.txD, fontWeight: 600 }}>
-            <div>Account</div><div>Group</div><div>Currency</div><div>Spent</div><div>Status</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 70px 90px 70px", gap: 8, padding: "5px 14px", fontSize: 10, textTransform: "uppercase", letterSpacing: ".5px", color: T.txD, fontWeight: 600 }}>
+            <div>Account</div><div>Group</div><div>Currency</div><div>Total Spent</div><div>Status</div>
           </div>
-          {accounts.map(a => (
-            <div key={a.id} className="hr" style={{ display: "grid", gridTemplateColumns: "1fr 90px 80px 70px 70px", gap: 8, alignItems: "center", padding: "9px 14px", borderRadius: 6, fontSize: 12.5 }}>
-              <div><div style={{ fontWeight: 600 }}>{a.name}</div><div style={{ fontSize: 10, color: T.txD, fontFamily: MONO }}>{a.id}</div></div>
-              <div style={{ color: T.txM, fontSize: 11 }}>{a.business_name || "—"}</div>
-              <div style={{ fontFamily: MONO, fontSize: 11, color: T.txM }}>{a.currency}</div>
-              <div style={{ fontFamily: MONO, fontSize: 11, color: T.txM }}>${parseFloat(a.amount_spent || 0).toLocaleString()}</div>
-              <div><Dot status={a.status} /><span style={{ fontSize: 11 }}>{a.status}</span></div>
-            </div>
-          ))}
+          {accounts.map(a => {
+            const currSymbol = { INR: "₹", USD: "$", GBP: "£", EUR: "€", AED: "د.إ", CAD: "C$", AUD: "A$", JPY: "¥", BRL: "R$", MXN: "MX$", SGD: "S$" }[a.currency] || a.currency + " ";
+            return (
+              <div key={a.id} className="hr" style={{ display: "grid", gridTemplateColumns: "1fr 90px 70px 90px 70px", gap: 8, alignItems: "center", padding: "9px 14px", borderRadius: 6, fontSize: 12.5 }}>
+                <div><div style={{ fontWeight: 600 }}>{a.name}</div><div style={{ fontSize: 10, color: T.txD, fontFamily: MONO }}>{a.id}</div></div>
+                <div style={{ color: T.txM, fontSize: 11 }}>{a.business_name || "—"}</div>
+                <div><Badge color={T.ac2}>{a.currency}</Badge></div>
+                <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 600, color: T.txM }}>{currSymbol}{parseFloat(a.amount_spent || 0).toLocaleString()}</div>
+                <div><Dot status={a.status} /><span style={{ fontSize: 11 }}>{a.status}</span></div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
 
-  const renderAnalytics = () => (
-    <div style={S.ct}>
-      <div style={S.card}>
-        <div style={S.cardT}>Analytics</div>
-        <div style={S.cardD}>Performance insights from Facebook Ads API</div>
-        <div style={{ textAlign: "center", padding: 36, color: T.txD }}>
-          {apiConnected ? "Analytics data loads from Facebook Insights once campaigns have performance data." : "Connect the Facebook API in Settings to view analytics."}
-        </div>
+  const renderAnalytics = () => {
+    // Aggregate analytics data
+    const totals = analyticsData.reduce((acc, r) => {
+      if (r.data && r.data[0]) {
+        const d = r.data[0];
+        acc.spend += parseFloat(d.spend || 0);
+        acc.impressions += parseInt(d.impressions || 0);
+        acc.clicks += parseInt(d.clicks || 0);
+        acc.reach += parseInt(d.reach || 0);
+        if (d.actions) {
+          const purchases = d.actions.find(a => a.action_type === "purchase" || a.action_type === "omni_purchase");
+          if (purchases) acc.purchases += parseInt(purchases.value || 0);
+        }
+      }
+      return acc;
+    }, { spend: 0, impressions: 0, clicks: 0, reach: 0, purchases: 0 });
+
+    const ctr = totals.impressions > 0 ? ((totals.clicks / totals.impressions) * 100).toFixed(2) : "0.00";
+    const cpc = totals.clicks > 0 ? (totals.spend / totals.clicks).toFixed(2) : "0.00";
+    const cpa = totals.purchases > 0 ? (totals.spend / totals.purchases).toFixed(2) : "—";
+
+    return (
+      <div style={S.ct}>
+        {!apiConnected ? (
+          <div style={{ ...S.card, textAlign: "center", padding: 40 }}>
+            <div style={{ fontSize: 48, marginBottom: 10 }}><Ic t="chart" sz={48} /></div>
+            <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 5 }}>Connect Facebook API</div>
+            <div style={{ fontSize: 13, color: T.txM, marginBottom: 16 }}>Connect your API to view live analytics</div>
+            <Btn variant="fb" onClick={() => setPg("settings")}><Ic t="fb" sz={14} /> Connect</Btn>
+          </div>
+        ) : (
+          <>
+            {/* Date Filter + Refresh */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ display: "flex", gap: 5 }}>
+                {[{ v: "today", l: "Today" }, { v: "yesterday", l: "Yesterday" }, { v: "last_7d", l: "7 Days" }, { v: "last_14d", l: "14 Days" }, { v: "last_30d", l: "30 Days" }].map(p => (
+                  <Btn key={p.v} variant={analyticsPreset === p.v ? "primary" : "ghost"} onClick={() => { setAnalyticsPreset(p.v); fetchAnalytics(p.v); }} style={{ padding: "5px 12px", fontSize: 11 }}>{p.l}</Btn>
+                ))}
+              </div>
+              <Btn variant="ghost" onClick={() => { fetchAnalytics(); fetchActiveSpend(); }} disabled={analyticsLoading}>
+                <Ic t="refresh" sz={13} /> {analyticsLoading ? "Loading..." : "Refresh"}
+              </Btn>
+            </div>
+
+            {/* KPI Cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(145px,1fr))", gap: 10, marginBottom: 16 }}>
+              {[
+                { l: "Spend", v: `${totals.spend.toFixed(2)}`, c: T.ac },
+                { l: "Impressions", v: totals.impressions.toLocaleString(), c: T.ac2 },
+                { l: "Clicks", v: totals.clicks.toLocaleString(), c: T.ok },
+                { l: "CTR", v: `${ctr}%`, c: T.warn },
+                { l: "CPC", v: cpc, c: T.ac },
+                { l: "Purchases", v: totals.purchases, c: T.ok },
+                { l: "CPA", v: cpa, c: T.err },
+                { l: "Reach", v: totals.reach.toLocaleString(), c: T.ac2 },
+              ].map((k, i) => (
+                <div key={i} style={{ ...S.card, padding: 14, marginBottom: 0 }}>
+                  <div style={{ fontSize: 10, color: T.txM, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 4, fontWeight: 600 }}>{k.l}</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: k.c, letterSpacing: "-1px" }}>{k.v}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Daily Chart */}
+            {dailyData.length > 0 && (
+              <div style={S.card}>
+                <div style={S.cardT}>Daily Performance</div>
+                <div style={{ height: 250, marginTop: 12 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={dailyData}>
+                      <defs>
+                        <linearGradient id="gSpend" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor={T.ac} stopOpacity={0.3} />
+                          <stop offset="95%" stopColor={T.ac} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <XAxis dataKey="date" stroke={T.txD} fontSize={10} tickFormatter={d => d.slice(5)} />
+                      <YAxis stroke={T.txD} fontSize={10} />
+                      <Tooltip contentStyle={{ background: T.sf, border: `1px solid ${T.bd}`, borderRadius: 8, fontSize: 12 }} />
+                      <Area type="monotone" dataKey="spend" stroke={T.ac} fill="url(#gSpend)" strokeWidth={2} name="Spend" />
+                      <Area type="monotone" dataKey="clicks" stroke={T.ok} fill="none" strokeWidth={1.5} name="Clicks" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            {/* Budget Calculator — Active Campaign Spend */}
+            <div style={S.card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <div style={S.cardT}>Budget Calculator — Today's Active Spend</div>
+                <Btn variant="ghost" onClick={fetchActiveSpend} style={{ padding: "5px 10px", fontSize: 11 }}><Ic t="refresh" sz={11} /> Refresh</Btn>
+              </div>
+              <div style={S.cardD}>Real-time spend across active accounts</div>
+              {activeSpend.accounts.length > 0 ? (
+                <>
+                  {activeSpend.accounts.map((a, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 12px", borderRadius: 6, fontSize: 12.5, background: i % 2 === 0 ? "rgba(255,255,255,.015)" : "transparent" }}>
+                      <span>{a.name || a.account_id}</span>
+                      <span style={{ fontFamily: MONO, fontWeight: 600, color: a.spend_today > 0 ? T.ok : T.txD }}>
+                        {a.currency} {a.spend_today.toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                  <div style={{ marginTop: 10, padding: 12, background: T.gradS, borderRadius: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontWeight: 700 }}>Total Spend Today</span>
+                    <span style={{ fontSize: 18, fontWeight: 800, color: T.ac, fontFamily: MONO }}>{activeSpend.total.toFixed(2)}</span>
+                  </div>
+                </>
+              ) : (
+                <div style={{ textAlign: "center", padding: 20, color: T.txD }}>Click Refresh to load today's spend data</div>
+              )}
+            </div>
+
+            {analyticsData.length === 0 && !analyticsLoading && (
+              <div style={{ textAlign: "center", padding: 24, color: T.txD }}>
+                Click a date range above to load analytics data from Facebook Insights.
+              </div>
+            )}
+          </>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   /* ══════════════════════════════════════
      RENDER: TEMPLATE EDITOR MODAL

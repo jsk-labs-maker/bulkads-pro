@@ -70,4 +70,35 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+/**
+ * GET /api/accounts/geo-search?q={query}&type={region|city}
+ * Search Facebook's adgeolocation database for regions/cities to include or exclude
+ */
+router.get("/geo-search", async (req, res) => {
+  try {
+    const { q, type } = req.query;
+    if (!q || q.length < 2) {
+      return res.json({ success: true, locations: [] });
+    }
+    const locationType = type || "region";
+    const result = await facebookService.graphRequest("GET", "/search", {
+      type: "adgeolocation",
+      q: q,
+      location_types: locationType,
+    }, req.fbToken);
+    res.json({
+      success: true,
+      locations: (result.data || []).map(l => ({
+        key: l.key,
+        name: l.name,
+        type: l.type,
+        country_code: l.country_code,
+        country_name: l.country_name,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Location search failed" });
+  }
+});
+
 module.exports = router;
