@@ -284,8 +284,8 @@ export default function App() {
   const [cBudgetMode, setCBudgetMode] = useState("CBO");
   const [cBidStrategy, setCBidStrategy] = useState("LOWEST_COST_WITHOUT_CAP");
   const [cPageId, setCPageId] = useState("");
-  const [cCountries, setCCountries] = useState([]);
-  const [cUseLocation, setCUseLocation] = useState(false);
+  const [cCountries, setCCountries] = useState(["IN"]);
+  const [cUseLocation, setCUseLocation] = useState(true);
   const [cPixelMode, setCPixelMode] = useState("auto");
   const [cPixelId, setCPixelId] = useState("");
   const [creatives, setCreatives] = useState([]);
@@ -537,7 +537,7 @@ export default function App() {
     setAdCopy({ primaryText: "", headline: "", description: "", cta: "Shop Now", url: "" });
     setAdSets([{ id: 1, name: "Broad", audienceType: "broad", ageMin: 18, ageMax: 65, gender: "all", interests: [], budget: "50" }]);
     setActiveAdSet(1); setSelAccounts([]); setCBudgetMode("CBO");
-    setCCountries([]); setCUseLocation(false); setCPixelMode("auto"); setCPixelId("");
+    setCCountries(["IN"]); setCUseLocation(true); setCPixelMode("auto"); setCPixelId("");
     setPublishing(false); setPubDone(false); setPubProgress(0); setPubResults(null); setWsResults([]);
     setAiVariations([]); setAiUrl("");
   };
@@ -580,11 +580,8 @@ export default function App() {
     const adSetsForApi = adSets.map(as => {
       const targeting = {};
 
-      // Location — OPTIONAL. Only add if user enabled location targeting
-      if (cUseLocation && cCountries.length > 0) {
-        targeting.geo_locations = { countries: cCountries };
-      }
-      // If cUseLocation is false or no countries, targeting.geo_locations is NOT set = worldwide
+      // Location — REQUIRED by Facebook. Always send at least one country.
+      targeting.geo_locations = { countries: cCountries.length > 0 ? cCountries : ["IN"] };
 
       if (as.audienceType !== "broad") {
         targeting.age_min = as.ageMin;
@@ -877,45 +874,31 @@ export default function App() {
             </div>
           </div>
 
-          {/* Location — OPTIONAL */}
+          {/* Location — REQUIRED by Facebook */}
           <div style={{ borderTop: `1px solid ${T.bd}`, paddingTop: 16, marginTop: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-              <label style={{ ...S.lbl, marginBottom: 0, flex: 1 }}>Location Targeting</label>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: T.txM }}>
-                <input type="checkbox" checked={cUseLocation} onChange={e => { setCUseLocation(e.target.checked); if (!e.target.checked) setCCountries([]); }} style={{ accentColor: T.ac }} />
-                Enable
-              </label>
+            <label style={S.lbl}>Target Location *</label>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
+              {COUNTRIES.slice(0, 10).map(c => (
+                <Chip key={c.code} selected={cCountries.includes(c.code)} onClick={() => {
+                  setCCountries(p => {
+                    const has = p.includes(c.code);
+                    if (has && p.length <= 1) return p; // Keep at least one country
+                    return has ? p.filter(x => x !== c.code) : [...p, c.code];
+                  });
+                }}>
+                  {c.name}
+                </Chip>
+              ))}
             </div>
-
-            {!cUseLocation ? (
-              <div style={{ padding: 10, background: "rgba(34,197,94,.04)", borderRadius: 8, border: "1px solid rgba(34,197,94,.1)", fontSize: 12, color: T.ok }}>
-                <Ic t="globe" sz={14} /> <b>Worldwide targeting</b> — ads will reach people in all countries. Enable location targeting to restrict to specific countries.
+            <select style={{ ...S.sel, marginBottom: 8 }} onChange={e => { if (e.target.value && !cCountries.includes(e.target.value)) setCCountries(p => [...p, e.target.value]); e.target.value = ""; }} value="">
+              <option value="">Add more countries...</option>
+              {COUNTRIES.filter(c => !cCountries.includes(c.code)).map(c => <option key={c.code} value={c.code}>{c.name} ({c.code})</option>)}
+            </select>
+            {cCountries.length > 0 && (
+              <div style={{ padding: 10, background: "rgba(99,102,241,.04)", borderRadius: 8, border: "1px solid rgba(99,102,241,.1)", fontSize: 12, color: T.ac }}>
+                Targeting: <b>{cCountries.map(c => COUNTRIES.find(x => x.code === c)?.name || c).join(", ")}</b>
+                {cCountries.length > 1 && <span style={{ cursor: "pointer", marginLeft: 8, color: T.err, fontSize: 11 }} onClick={() => setCCountries(["IN"])}>Reset</span>}
               </div>
-            ) : (
-              <>
-                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
-                  {COUNTRIES.slice(0, 10).map(c => (
-                    <Chip key={c.code} selected={cCountries.includes(c.code)} onClick={() => setCCountries(p => p.includes(c.code) ? p.filter(x => x !== c.code) : [...p, c.code])}>
-                      {c.name}
-                    </Chip>
-                  ))}
-                </div>
-                <select style={{ ...S.sel, marginBottom: 8 }} onChange={e => { if (e.target.value && !cCountries.includes(e.target.value)) setCCountries(p => [...p, e.target.value]); e.target.value = ""; }} value="">
-                  <option value="">Add more countries...</option>
-                  {COUNTRIES.filter(c => !cCountries.includes(c.code)).map(c => <option key={c.code} value={c.code}>{c.name} ({c.code})</option>)}
-                </select>
-                {cCountries.length > 0 && (
-                  <div style={{ padding: 10, background: "rgba(99,102,241,.04)", borderRadius: 8, border: "1px solid rgba(99,102,241,.1)", fontSize: 12, color: T.ac }}>
-                    Targeting: <b>{cCountries.map(c => COUNTRIES.find(x => x.code === c)?.name || c).join(", ")}</b>
-                    <span style={{ cursor: "pointer", marginLeft: 8, color: T.err, fontSize: 11 }} onClick={() => setCCountries([])}>Clear all</span>
-                  </div>
-                )}
-                {cCountries.length === 0 && (
-                  <div style={{ padding: 10, background: "rgba(234,179,8,.04)", borderRadius: 8, border: "1px solid rgba(234,179,8,.1)", fontSize: 12, color: T.warn }}>
-                    Select at least one country, or disable location targeting for worldwide.
-                  </div>
-                )}
-              </>
             )}
           </div>
 
@@ -1256,7 +1239,7 @@ export default function App() {
                 { l: "Objective", v: obj?.label || cObj },
                 { l: "Budget", v: `$${cBudget} ${cBudgetType} (${cBudgetMode})` },
                 { l: "Page", v: fbPages.find(p => p.id === cPageId)?.name || cPageId },
-                { l: "Location", v: cUseLocation && cCountries.length > 0 ? cCountries.join(", ") : "Worldwide" },
+                { l: "Location", v: cCountries.length > 0 ? cCountries.map(c => COUNTRIES.find(x => x.code === c)?.name || c).join(", ") : "India" },
                 { l: "Creatives", v: creativeFiles.length },
                 { l: "Ad Sets", v: adSets.map(a => a.name).join(", ") },
                 { l: "Ads per Account", v: totalAdsPerAccount },

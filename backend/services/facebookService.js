@@ -53,19 +53,19 @@ const OBJECTIVE_CONFIG = {
   },
   awareness: {
     fbObjective: "OUTCOME_AWARENESS",
-    optimizationGoal: "REACH",
+    optimizationGoal: "IMPRESSIONS",
     billingEvent: "IMPRESSIONS",
     needsPixel: false,
   },
   engagement: {
     fbObjective: "OUTCOME_ENGAGEMENT",
-    optimizationGoal: "POST_ENGAGEMENT",
+    optimizationGoal: "LINK_CLICKS",
     billingEvent: "IMPRESSIONS",
     needsPixel: false,
   },
   leads: {
     fbObjective: "OUTCOME_LEADS",
-    optimizationGoal: "LEAD_GENERATION",
+    optimizationGoal: "OFFSITE_CONVERSIONS",
     billingEvent: "IMPRESSIONS",
     needsPixel: true,
     customEventType: "LEAD",
@@ -310,7 +310,7 @@ class FacebookService {
       special_ad_categories: [],
     };
 
-    // CBO: Budget on campaign level
+    // CBO: Budget + bid_strategy on campaign level
     if (data.budget_mode === "CBO" || !data.budget_mode) {
       if (data.daily_budget) {
         params.daily_budget = Math.round(Number(data.daily_budget) * 100);
@@ -318,11 +318,12 @@ class FacebookService {
       if (data.lifetime_budget) {
         params.lifetime_budget = Math.round(Number(data.lifetime_budget) * 100);
       }
+      // Bid strategy goes on campaign for CBO
+      if (data.bid_strategy) {
+        params.bid_strategy = data.bid_strategy;
+      }
     }
-
-    if (data.bid_strategy) {
-      params.bid_strategy = data.bid_strategy;
-    }
+    // ABO: No budget and no bid_strategy on campaign — they go on ad sets
 
     const result = await this.graphRequest("POST", `/${id}/campaigns`, params, token);
     logger.info(`Campaign created: ${result.id} in ${id} (${data.objective}, ${data.budget_mode || "CBO"})`);
@@ -332,8 +333,8 @@ class FacebookService {
   /* ══════════════════════════════════════
      AD SET CREATION
      — Handles ALL objectives properly
-     — Location is OPTIONAL
-     — ABO budget goes here, CBO budget does NOT
+     — Location REQUIRED by Facebook (defaults to account's country)
+     — ABO budget + bid_strategy go here, CBO does NOT
      ══════════════════════════════════════ */
   async createAdSet(accountId, data, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
@@ -342,20 +343,23 @@ class FacebookService {
     // ── Build targeting ──
     const targeting = {};
 
-    // Geo locations — OPTIONAL. If provided, use them. Otherwise, Facebook targets worldwide.
+    // Geo locations — REQUIRED by Facebook. Must have at least one country.
     if (data.targeting?.geo_locations && Object.keys(data.targeting.geo_locations).length > 0) {
       const geo = data.targeting.geo_locations;
-      // Only add if there are actual countries/regions specified
       if (geo.countries && geo.countries.length > 0) {
         targeting.geo_locations = { countries: geo.countries };
       } else if (geo.regions && geo.regions.length > 0) {
         targeting.geo_locations = { regions: geo.regions };
       } else if (geo.cities && geo.cities.length > 0) {
         targeting.geo_locations = { cities: geo.cities };
+      } else {
+        // Fallback — Facebook requires at least one location
+        targeting.geo_locations = { countries: ["IN"] };
       }
-      // If no countries/regions/cities specified, leave geo_locations empty (worldwide)
+    } else {
+      // No location specified — default to India (account's country)
+      targeting.geo_locations = { countries: ["IN"] };
     }
-    // NOTE: If targeting.geo_locations is not set at all, Facebook defaults to worldwide
 
     // Excluded geo locations
     if (data.targeting?.excluded_geo_locations) {
@@ -381,9 +385,6 @@ class FacebookService {
       targeting.custom_audiences = data.targeting.custom_audiences;
     }
 
-    // Advantage+ audience
-    targeting.targeting_automation = { advantage_audience: 1 };
-
     // ── Build ad set params ──
     const params = {
       campaign_id: data.campaign_id,
@@ -408,7 +409,7 @@ class FacebookService {
       // Don't set promoted_object — LINK_CLICKS doesn't need it
     }
 
-    // ── ABO: Budget on ad set level (NOT campaign) ──
+    // ── ABO: Budget + bid_strategy on ad set level (NOT campaign) ──
     if (data.budget_mode === "ABO") {
       if (data.daily_budget) {
         params.daily_budget = Math.round(Number(data.daily_budget) * 100);
@@ -416,8 +417,10 @@ class FacebookService {
       if (data.lifetime_budget) {
         params.lifetime_budget = Math.round(Number(data.lifetime_budget) * 100);
       }
+      // ABO needs bid_strategy at ad set level
+      params.bid_strategy = data.bid_strategy || "LOWEST_COST_WITHOUT_CAP";
     }
-    // CBO: Do NOT set budget here — it's on the campaign
+    // CBO: Do NOT set budget or bid_strategy here — they're on the campaign
 
     // Schedule
     if (data.start_time) params.start_time = data.start_time;
