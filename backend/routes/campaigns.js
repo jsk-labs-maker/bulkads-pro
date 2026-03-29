@@ -81,6 +81,10 @@ router.post("/publish", upload.array("creatives", 10), async (req, res) => {
       budgetMode: config.budget_mode || "CBO",
       accounts: config.account_ids.length,
       variations: config.ad_variations.length,
+      filesUploaded: files.length,
+      fileNames: files.map(f => f.originalname),
+      fileSizes: files.map(f => `${(f.size / 1024).toFixed(0)}KB`),
+      hasBuffers: config.ad_variations.map(v => !!v.image_buffer),
     });
 
     // Broadcast start

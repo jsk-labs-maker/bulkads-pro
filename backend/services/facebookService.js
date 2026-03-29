@@ -455,7 +455,13 @@ class FacebookService {
         timeout: 60000,
       });
       const images = response.data.images;
+      if (!images || Object.keys(images).length === 0) {
+        throw new Error("Image upload returned no data");
+      }
       const imageHash = Object.values(images)[0]?.hash;
+      if (!imageHash) {
+        throw new Error("Image upload returned no hash");
+      }
       logger.info(`Image uploaded: ${imageHash} to ${id}`);
       return { hash: imageHash, type: "image" };
     } catch (error) {
@@ -547,6 +553,9 @@ class FacebookService {
       }
     } else {
       // IMAGE creative
+      if (!data.image_hash) {
+        logger.warn(`Creating image creative without image_hash for ${id} — ad may show without image`);
+      }
       const linkData = {
         link: data.url,
         message: data.primary_text || "",
