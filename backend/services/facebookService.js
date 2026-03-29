@@ -1,24 +1,88 @@
 /**
  * ══════════════════════════════════════════════════════════════
- * Facebook Graph API Service — v4 (ALL BUGS FIXED)
+ * Facebook Graph API Service — v5 (Complete Rebuild)
  * ══════════════════════════════════════════════════════════════
- * 
- * FIXES:
- * 1. POST params use URLSearchParams — no double-JSON encoding
- * 2. Budget goes to campaign level ONLY (CBO) — not duplicated on ad set
- * 3. promoted_object with pixel_id for Sales/Conversions
- * 4. special_ad_categories as proper empty array []
- * 5. Validates creative URL is not empty
- * 6. Detailed error logging with full FB response
- * 7. Auto-fetches pixel per account for conversion campaigns
+ *
+ * FIXES from v4:
+ * 1. ALL objectives work (traffic, awareness, engagement, leads, app_installs, video_views, sales, conversions)
+ * 2. ABO mode properly sets budget on ad sets, NOT on campaign
+ * 3. CBO mode properly sets budget on campaign, NOT on ad sets
+ * 4. Location is OPTIONAL — omit geo_locations for worldwide targeting
+ * 5. Proper promoted_object for each objective type
+ * 6. Proper optimization_goal per objective
+ * 7. Proper billing_event per objective
+ * 8. Error objects are proper Error instances with stack traces
+ * 9. No fallback to example.com — URL validated before use
+ * 10. Retry logic for rate-limited requests
  */
 
 const axios = require("axios");
 const FormData = require("form-data");
-const fs = require("fs");
 const logger = require("../utils/logger");
 
 const FB_GRAPH_URL = "https://graph.facebook.com";
+
+/* ══════════════════════════════════════
+   OBJECTIVE CONFIGURATION MAP
+   Each objective needs specific:
+   - Facebook API objective value
+   - optimization_goal for ad sets
+   - billing_event
+   - whether it needs a pixel/promoted_object
+   ══════════════════════════════════════ */
+const OBJECTIVE_CONFIG = {
+  sales: {
+    fbObjective: "OUTCOME_SALES",
+    optimizationGoal: "OFFSITE_CONVERSIONS",
+    billingEvent: "IMPRESSIONS",
+    needsPixel: true,
+    customEventType: "PURCHASE",
+  },
+  conversions: {
+    fbObjective: "OUTCOME_SALES",
+    optimizationGoal: "OFFSITE_CONVERSIONS",
+    billingEvent: "IMPRESSIONS",
+    needsPixel: true,
+    customEventType: "PURCHASE",
+  },
+  traffic: {
+    fbObjective: "OUTCOME_TRAFFIC",
+    optimizationGoal: "LINK_CLICKS",
+    billingEvent: "IMPRESSIONS",
+    needsPixel: false,
+  },
+  awareness: {
+    fbObjective: "OUTCOME_AWARENESS",
+    optimizationGoal: "REACH",
+    billingEvent: "IMPRESSIONS",
+    needsPixel: false,
+  },
+  engagement: {
+    fbObjective: "OUTCOME_ENGAGEMENT",
+    optimizationGoal: "POST_ENGAGEMENT",
+    billingEvent: "IMPRESSIONS",
+    needsPixel: false,
+  },
+  leads: {
+    fbObjective: "OUTCOME_LEADS",
+    optimizationGoal: "LEAD_GENERATION",
+    billingEvent: "IMPRESSIONS",
+    needsPixel: true,
+    customEventType: "LEAD",
+  },
+  app_installs: {
+    fbObjective: "OUTCOME_APP_PROMOTION",
+    optimizationGoal: "APP_INSTALLS",
+    billingEvent: "IMPRESSIONS",
+    needsPixel: false,
+  },
+  video_views: {
+    fbObjective: "OUTCOME_ENGAGEMENT",
+    optimizationGoal: "THRUPLAY",
+    billingEvent: "IMPRESSIONS",
+    needsPixel: false,
+  },
+};
 
 class FacebookService {
   constructor() {
@@ -30,95 +94,118 @@ class FacebookService {
     return userToken || process.env.FB_SYSTEM_USER_TOKEN;
   }
 
-  /**
-   * Graph API request — handles serialization properly
-   * For POST: values are sent as form-urlencoded strings
-   * Objects/arrays MUST be JSON.stringify'd ONCE before passing here
-   */
-  async graphRequest(method, endpoint, params = {}, token = null) {
+  /* ══════════════════════════════════════
+     CORE: Graph API Request
+     ══════════════════════════════════════ */
+  async graphRequest(method, endpoint, params = {}, token = null, retries = 2) {
     const accessToken = this.getToken(token);
-    if (!accessToken) throw new Error("No access token");
+    if (!accessToken) throw new Error("No Facebook access token configured");
 
     const url = `${this.baseUrl}${endpoint}`;
 
-    try {
-      let response;
-      if (method === "GET") {
-        response = await axios.get(url, { params: { access_token: accessToken, ...params }, timeout: 30000 });
-      } else {
-        // POST: Facebook expects application/x-www-form-urlencoded
-        const form = new URLSearchParams();
-        form.append("access_token", accessToken);
-        for (const [key, value] of Object.entries(params)) {
-          if (value === undefined || value === null) continue;
-          // If value is already a string, send as-is. If object/array, JSON.stringify it.
-          if (typeof value === "string") {
-            form.append(key, value);
-          } else if (typeof value === "number" || typeof value === "boolean") {
-            form.append(key, String(value));
-          } else {
-            form.append(key, JSON.stringify(value));
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        let response;
+        if (method === "GET") {
+          response = await axios.get(url, {
+            params: { access_token: accessToken, ...params },
+            timeout: 30000,
+          });
+        } else {
+          // POST: Facebook expects application/x-www-form-urlencoded
+          const form = new URLSearchParams();
+          form.append("access_token", accessToken);
+          for (const [key, value] of Object.entries(params)) {
+            if (value === undefined || value === null) continue;
+            if (typeof value === "string") {
+              form.append(key, value);
+            } else if (typeof value === "number" || typeof value === "boolean") {
+              form.append(key, String(value));
+            } else {
+              form.append(key, JSON.stringify(value));
+            }
           }
+          response = await axios.post(url, form.toString(), {
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            timeout: 30000,
+          });
         }
-        response = await axios.post(url, form.toString(), {
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          timeout: 30000,
+        logger.debug(`FB API ${method} ${endpoint} -> OK`);
+        return response.data;
+      } catch (error) {
+        const fbError = error.response?.data?.error;
+        const errMsg = fbError?.message || error.message;
+
+        // Retry on rate limiting (code 17, 32, or 4)
+        const isRateLimit = fbError && [4, 17, 32].includes(fbError.code);
+        if (isRateLimit && attempt < retries) {
+          const wait = Math.pow(2, attempt + 1) * 1000; // 2s, 4s
+          logger.warn(`Rate limited on ${endpoint}, retrying in ${wait}ms (attempt ${attempt + 1}/${retries})`);
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
+
+        logger.error(`FB API Error [${method} ${endpoint}]: ${errMsg}`, {
+          code: fbError?.code,
+          subcode: fbError?.error_subcode,
+          type: fbError?.type,
         });
+
+        const err = new Error(errMsg);
+        err.fbCode = fbError?.code;
+        err.fbSubcode = fbError?.error_subcode;
+        err.fbType = fbError?.type;
+        err.detail = fbError?.error_user_msg || fbError?.error_user_title || "";
+        throw err;
       }
-      logger.debug(`FB API ${method} ${endpoint} → OK`);
-      return response.data;
-    } catch (error) {
-      const fbError = error.response?.data?.error;
-      const errMsg = fbError?.message || error.message;
-      const errDetail = fbError?.error_user_msg || fbError?.error_user_title || "";
-      logger.error(`FB API Error [${method} ${endpoint}]: ${errMsg}`, {
-        code: fbError?.code,
-        subcode: fbError?.error_subcode,
-        type: fbError?.type,
-        detail: errDetail,
-        fbtrace: fbError?.fbtrace_id,
-      });
-      throw {
-        message: errMsg,
-        detail: errDetail,
-        code: fbError?.code,
-        subcode: fbError?.error_subcode,
-        type: fbError?.type,
-      };
     }
   }
 
-  /* ── TOKEN ── */
+  /* ══════════════════════════════════════
+     TOKEN OPERATIONS
+     ══════════════════════════════════════ */
   async validateToken(token) {
     const appToken = `${process.env.FB_APP_ID}|${process.env.FB_APP_SECRET}`;
-    const result = await axios.get(`${this.baseUrl}/debug_token`, { params: { input_token: token, access_token: appToken } });
+    const result = await axios.get(`${this.baseUrl}/debug_token`, {
+      params: { input_token: token, access_token: appToken },
+      timeout: 15000,
+    });
     return result.data.data;
   }
 
   async exchangeForLongLivedToken(shortLivedToken) {
     const result = await axios.get(`${this.baseUrl}/oauth/access_token`, {
-      params: { grant_type: "fb_exchange_token", client_id: process.env.FB_APP_ID, client_secret: process.env.FB_APP_SECRET, fb_exchange_token: shortLivedToken },
+      params: {
+        grant_type: "fb_exchange_token",
+        client_id: process.env.FB_APP_ID,
+        client_secret: process.env.FB_APP_SECRET,
+        fb_exchange_token: shortLivedToken,
+      },
+      timeout: 15000,
     });
     return result.data;
   }
 
-  /* ── ACCOUNTS ── */
+  /* ══════════════════════════════════════
+     AD ACCOUNTS
+     ══════════════════════════════════════ */
   async getOwnedAdAccounts(businessId, token = null) {
     const accounts = [];
-    const params = {
-      fields: "id,name,account_id,account_status,currency,timezone_name,timezone_offset_hours_utc,amount_spent,balance,business_name,spend_cap,disable_reason",
-      limit: 100,
-    };
-    const result = await this.graphRequest("GET", `/${businessId}/owned_ad_accounts`, params, token);
+    const fields = "id,name,account_id,account_status,currency,timezone_name,timezone_offset_hours_utc,amount_spent,balance,business_name,spend_cap,disable_reason";
+    const result = await this.graphRequest("GET", `/${businessId}/owned_ad_accounts`, { fields, limit: 100 }, token);
     if (result.data) accounts.push(...result.data);
-    // Handle pagination
+
+    // Pagination
     let next = result.paging?.next;
     while (next) {
       try {
         const r = await axios.get(next, { timeout: 30000 });
         if (r.data?.data) accounts.push(...r.data.data);
         next = r.data?.paging?.next;
-      } catch (e) { break; }
+      } catch (e) {
+        logger.warn("Pagination failed for owned accounts", { error: e.message });
+        break;
+      }
     }
     logger.info(`Fetched ${accounts.length} owned ad accounts`);
     return accounts;
@@ -127,10 +214,14 @@ class FacebookService {
   async getClientAdAccounts(businessId, token = null) {
     try {
       const result = await this.graphRequest("GET", `/${businessId}/client_ad_accounts`, {
-        fields: "id,name,account_id,account_status,currency,timezone_name,amount_spent,business_name", limit: 100,
+        fields: "id,name,account_id,account_status,currency,timezone_name,amount_spent,business_name",
+        limit: 100,
       }, token);
       return result.data || [];
-    } catch (e) { return []; }
+    } catch (e) {
+      logger.warn("Failed to fetch client ad accounts", { error: e.message });
+      return [];
+    }
   }
 
   async getAllAdAccounts(businessId, token = null) {
@@ -138,23 +229,35 @@ class FacebookService {
       this.getOwnedAdAccounts(businessId, token),
       this.getClientAdAccounts(businessId, token),
     ]);
-    const all = [...(owned.value || []), ...(client.value || [])];
+    const ownedAccounts = owned.status === "fulfilled" ? owned.value : [];
+    const clientAccounts = client.status === "fulfilled" ? client.value : [];
+    const all = [...ownedAccounts, ...clientAccounts];
+
+    // Deduplicate by id
     const seen = new Set();
-    return all.filter(a => { if (seen.has(a.id)) return false; seen.add(a.id); return true; });
+    return all.filter(a => {
+      if (seen.has(a.id)) return false;
+      seen.add(a.id);
+      return true;
+    });
   }
 
   async getAdAccountDetails(accountId, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-    return this.graphRequest("GET", `/${id}`, { fields: "id,name,account_id,account_status,currency,timezone_name,amount_spent,balance,business_name,spend_cap,disable_reason" }, token);
+    return this.graphRequest("GET", `/${id}`, {
+      fields: "id,name,account_id,account_status,currency,timezone_name,amount_spent,balance,business_name,spend_cap,disable_reason",
+    }, token);
   }
 
-  /* ── PIXEL ── */
+  /* ══════════════════════════════════════
+     PIXELS
+     ══════════════════════════════════════ */
   async getAccountPixel(accountId, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
     try {
       const result = await this.graphRequest("GET", `/${id}/adspixels`, { fields: "id,name", limit: 1 }, token);
       if (result.data && result.data.length > 0) {
-        logger.info(`Pixel found: ${result.data[0].id} (${result.data[0].name}) for ${id}`);
+        logger.info(`Pixel found: ${result.data[0].id} for ${id}`);
         return result.data[0].id;
       }
     } catch (e) {
@@ -163,175 +266,194 @@ class FacebookService {
     return null;
   }
 
-  /* ── PAGES ── */
+  /* ══════════════════════════════════════
+     PAGES
+     ══════════════════════════════════════ */
   async getBusinessPages(businessId, token = null) {
     const allPages = [];
-    try {
-      const r = await this.graphRequest("GET", `/${businessId}/owned_pages`, { fields: "id,name,picture", limit: 100 }, token);
-      if (r.data) allPages.push(...r.data);
-    } catch (e) {}
-    try {
-      const r = await this.graphRequest("GET", `/${businessId}/client_pages`, { fields: "id,name,picture", limit: 100 }, token);
-      if (r.data) allPages.push(...r.data);
-    } catch (e) {}
-    try {
-      const r = await this.graphRequest("GET", `/me/accounts`, { fields: "id,name,picture", limit: 100 }, token);
-      if (r.data) allPages.push(...r.data);
-    } catch (e) {}
+
+    const sources = [
+      { endpoint: `/${businessId}/owned_pages`, label: "owned" },
+      { endpoint: `/${businessId}/client_pages`, label: "client" },
+      { endpoint: `/me/accounts`, label: "personal" },
+    ];
+
+    for (const source of sources) {
+      try {
+        const r = await this.graphRequest("GET", source.endpoint, { fields: "id,name,picture", limit: 100 }, token);
+        if (r.data) allPages.push(...r.data);
+      } catch (e) {
+        logger.debug(`No ${source.label} pages: ${e.message}`);
+      }
+    }
+
+    // Deduplicate
     const seen = new Set();
-    return allPages.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
+    return allPages.filter(p => {
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
   }
 
-  /* ══════════════════════════════════════════════════════════════
+  /* ══════════════════════════════════════
      CAMPAIGN CREATION
-     ══════════════════════════════════════════════════════════════ */
+     ══════════════════════════════════════ */
   async createCampaign(accountId, data, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-
-    const objectiveMap = {
-      conversions: "OUTCOME_SALES", traffic: "OUTCOME_TRAFFIC", awareness: "OUTCOME_AWARENESS",
-      engagement: "OUTCOME_ENGAGEMENT", leads: "OUTCOME_LEADS", sales: "OUTCOME_SALES",
-      app_installs: "OUTCOME_APP_PROMOTION", video_views: "OUTCOME_ENGAGEMENT",
-    };
+    const objConfig = OBJECTIVE_CONFIG[data.objective] || OBJECTIVE_CONFIG.sales;
 
     const params = {
       name: data.name,
-      objective: objectiveMap[data.objective] || data.objective,
+      objective: objConfig.fbObjective,
       status: data.status || "PAUSED",
-      special_ad_categories: [], // Must be array, empty = no special category
+      special_ad_categories: [],
     };
 
-    // Budget at campaign level (CBO — Campaign Budget Optimization)
-    if (data.daily_budget) {
-      params.daily_budget = Math.round(data.daily_budget * 100); // cents
+    // CBO: Budget on campaign level
+    if (data.budget_mode === "CBO" || !data.budget_mode) {
+      if (data.daily_budget) {
+        params.daily_budget = Math.round(Number(data.daily_budget) * 100);
+      }
+      if (data.lifetime_budget) {
+        params.lifetime_budget = Math.round(Number(data.lifetime_budget) * 100);
+      }
     }
-    if (data.lifetime_budget) {
-      params.lifetime_budget = Math.round(data.lifetime_budget * 100);
-    }
+
     if (data.bid_strategy) {
       params.bid_strategy = data.bid_strategy;
     }
 
     const result = await this.graphRequest("POST", `/${id}/campaigns`, params, token);
-    logger.info(`Campaign created: ${result.id} in ${id}`);
+    logger.info(`Campaign created: ${result.id} in ${id} (${data.objective}, ${data.budget_mode || "CBO"})`);
     return result;
   }
 
-  /* ══════════════════════════════════════════════════════════════
-     AD SET CREATION — with pixel + promoted_object
-     ══════════════════════════════════════════════════════════════ */
+  /* ══════════════════════════════════════
+     AD SET CREATION
+     — Handles ALL objectives properly
+     — Location is OPTIONAL
+     — ABO budget goes here, CBO budget does NOT
+     ══════════════════════════════════════ */
   async createAdSet(accountId, data, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
+    const objConfig = OBJECTIVE_CONFIG[data.objective] || OBJECTIVE_CONFIG.sales;
 
-    // Build targeting
+    // ── Build targeting ──
     const targeting = {};
 
-    // Geo locations
-    if (data.targeting?.geo_locations) {
-      targeting.geo_locations = data.targeting.geo_locations;
-    } else {
-      targeting.geo_locations = { countries: ["US"] };
+    // Geo locations — OPTIONAL. If provided, use them. Otherwise, Facebook targets worldwide.
+    if (data.targeting?.geo_locations && Object.keys(data.targeting.geo_locations).length > 0) {
+      const geo = data.targeting.geo_locations;
+      // Only add if there are actual countries/regions specified
+      if (geo.countries && geo.countries.length > 0) {
+        targeting.geo_locations = { countries: geo.countries };
+      } else if (geo.regions && geo.regions.length > 0) {
+        targeting.geo_locations = { regions: geo.regions };
+      } else if (geo.cities && geo.cities.length > 0) {
+        targeting.geo_locations = { cities: geo.cities };
+      }
+      // If no countries/regions/cities specified, leave geo_locations empty (worldwide)
     }
+    // NOTE: If targeting.geo_locations is not set at all, Facebook defaults to worldwide
 
-    // Pass through excluded regions (e.g. high RTO Indian states)
+    // Excluded geo locations
     if (data.targeting?.excluded_geo_locations) {
       targeting.excluded_geo_locations = data.targeting.excluded_geo_locations;
     }
 
-    // Age
-    if (data.targeting?.age_min) targeting.age_min = data.targeting.age_min;
-    if (data.targeting?.age_max) targeting.age_max = data.targeting.age_max;
+    // Age (always set reasonable defaults)
+    targeting.age_min = data.targeting?.age_min || 18;
+    targeting.age_max = data.targeting?.age_max || 65;
 
     // Gender
-    if (data.targeting?.genders) targeting.genders = data.targeting.genders;
+    if (data.targeting?.genders && data.targeting.genders.length > 0) {
+      targeting.genders = data.targeting.genders;
+    }
 
     // Interests
-    if (data.targeting?.interests?.length > 0) {
+    if (data.targeting?.interests && data.targeting.interests.length > 0) {
       targeting.flexible_spec = [{ interests: data.targeting.interests }];
     }
 
-    // Placements
-    if (data.publisher_platforms?.length > 0) {
-      targeting.publisher_platforms = data.publisher_platforms;
-      if (data.facebook_positions?.length > 0) targeting.facebook_positions = data.facebook_positions;
-      if (data.instagram_positions?.length > 0) targeting.instagram_positions = data.instagram_positions;
+    // Custom audiences
+    if (data.targeting?.custom_audiences && data.targeting.custom_audiences.length > 0) {
+      targeting.custom_audiences = data.targeting.custom_audiences;
     }
 
-    // Optimization goal
-    const optMap = {
-      conversions: "OFFSITE_CONVERSIONS", traffic: "LINK_CLICKS", awareness: "REACH",
-      engagement: "POST_ENGAGEMENT", leads: "LEAD_GENERATION", sales: "OFFSITE_CONVERSIONS",
-      app_installs: "APP_INSTALLS", video_views: "THRUPLAY",
-    };
-
-    // Add targeting_automation INSIDE targeting spec
+    // Advantage+ audience
     targeting.targeting_automation = { advantage_audience: 1 };
 
+    // ── Build ad set params ──
     const params = {
       campaign_id: data.campaign_id,
       name: data.name || "Ad Set",
       targeting: targeting,
-      billing_event: "IMPRESSIONS",
-      optimization_goal: optMap[data.objective] || "OFFSITE_CONVERSIONS",
+      billing_event: objConfig.billingEvent,
+      optimization_goal: objConfig.optimizationGoal,
       status: data.status || "PAUSED",
-      // Also send as top-level param (some API versions need this)
-      targeting_automation: { advantage_audience: 1 },
     };
 
-    // CRITICAL: promoted_object for conversion-based campaigns
-    const needsPixel = ["conversions", "sales"].includes(data.objective);
-    if (needsPixel && data.pixel_id) {
-      params.promoted_object = { pixel_id: data.pixel_id, custom_event_type: "PURCHASE" };
-    } else if (data.objective === "leads" && data.pixel_id) {
-      params.promoted_object = { pixel_id: data.pixel_id, custom_event_type: "LEAD" };
-    } else if (needsPixel && !data.pixel_id) {
-      // No pixel — switch to link clicks so it doesn't fail
-      logger.warn(`No pixel for ${id}, switching to LINK_CLICKS optimization`);
-      // Keep OFFSITE_CONVERSIONS even without pixel - Facebook will still try to optimize for conversions
+    // ── promoted_object — CRITICAL for conversion-based objectives ──
+    if (objConfig.needsPixel && data.pixel_id) {
+      params.promoted_object = {
+        pixel_id: data.pixel_id,
+        custom_event_type: objConfig.customEventType,
+      };
+    } else if (objConfig.needsPixel && !data.pixel_id) {
+      // If we need a pixel but don't have one, fall back to LINK_CLICKS
+      // This prevents the API from rejecting the ad set
+      logger.warn(`No pixel for ${id} with objective ${data.objective} — falling back to LINK_CLICKS`);
+      params.optimization_goal = "LINK_CLICKS";
+      // Don't set promoted_object — LINK_CLICKS doesn't need it
     }
 
-    // NO budget here when CBO — budget on ad set only for ABO
-    if (data.daily_budget) {
-      params.daily_budget = Math.round(data.daily_budget * 100);
+    // ── ABO: Budget on ad set level (NOT campaign) ──
+    if (data.budget_mode === "ABO") {
+      if (data.daily_budget) {
+        params.daily_budget = Math.round(Number(data.daily_budget) * 100);
+      }
+      if (data.lifetime_budget) {
+        params.lifetime_budget = Math.round(Number(data.lifetime_budget) * 100);
+      }
     }
-    if (data.lifetime_budget) {
-      params.lifetime_budget = Math.round(data.lifetime_budget * 100);
-    }
+    // CBO: Do NOT set budget here — it's on the campaign
+
+    // Schedule
+    if (data.start_time) params.start_time = data.start_time;
+    if (data.end_time) params.end_time = data.end_time;
 
     const result = await this.graphRequest("POST", `/${id}/adsets`, params, token);
     logger.info(`Ad Set created: ${result.id} in ${id}`);
     return result;
   }
 
-  /* ══════════════════════════════════════════════════════════════
-     IMAGE UPLOAD
-     ══════════════════════════════════════════════════════════════ */
+  /* ══════════════════════════════════════
+     MEDIA UPLOADS
+     ══════════════════════════════════════ */
   async uploadAdImageFromBuffer(accountId, buffer, filename, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
     const accessToken = this.getToken(token);
     const form = new FormData();
     form.append("access_token", accessToken);
     form.append("filename", buffer, { filename });
+
     try {
       const response = await axios.post(`${this.baseUrl}/${id}/adimages`, form, {
-        headers: form.getHeaders(), timeout: 60000,
+        headers: form.getHeaders(),
+        timeout: 60000,
       });
       const images = response.data.images;
       const imageHash = Object.values(images)[0]?.hash;
       logger.info(`Image uploaded: ${imageHash} to ${id}`);
       return { hash: imageHash, type: "image" };
     } catch (error) {
-      const fbErr = error.response?.data?.error;
-      logger.error(`Image upload failed for ${id}: ${fbErr?.message || error.message}`);
-      throw { message: fbErr?.message || error.message };
+      const msg = error.response?.data?.error?.message || error.message;
+      logger.error(`Image upload failed for ${id}: ${msg}`);
+      throw new Error(`Image upload failed: ${msg}`);
     }
   }
 
-  /**
-   * Upload VIDEO to an ad account
-   * POST /act_{account_id}/advideos
-   * Returns video ID needed for video_data in ad creative
-   */
   async uploadAdVideoFromBuffer(accountId, buffer, filename, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
     const accessToken = this.getToken(token);
@@ -339,88 +461,88 @@ class FacebookService {
     form.append("access_token", accessToken);
     form.append("source", buffer, { filename });
     form.append("title", filename);
+
     try {
       const response = await axios.post(`${this.baseUrl}/${id}/advideos`, form, {
-        headers: form.getHeaders(), timeout: 300000,
-        maxContentLength: Infinity, maxBodyLength: Infinity,
+        headers: form.getHeaders(),
+        timeout: 300000,
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
       });
       const videoId = response.data.id;
       logger.info(`Video uploaded: ${videoId} to ${id}`);
-      
-      // Wait for video to process — Facebook needs time to generate thumbnails
-      logger.info(`Waiting 8s for video ${videoId} to process...`);
-      await new Promise(r => setTimeout(r, 8000));
-      
-      // Get video thumbnail
+
+      // Poll for video processing instead of fixed wait
       let thumbnailUrl = null;
-      try {
-        const thumbResult = await this.graphRequest("GET", `/${videoId}`, { fields: "thumbnails,picture" }, token);
-        if (thumbResult.thumbnails?.data?.[0]?.uri) {
-          thumbnailUrl = thumbResult.thumbnails.data[0].uri;
-        } else if (thumbResult.picture) {
-          thumbnailUrl = thumbResult.picture;
-        }
-        logger.info(`Video thumbnail: ${thumbnailUrl ? "found" : "not found"}`);
-      } catch (e) { logger.warn(`Thumbnail fetch failed for video ${videoId}: ${e.message}`); }
-      
+      for (let i = 0; i < 5; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const thumbResult = await this.graphRequest("GET", `/${videoId}`, { fields: "thumbnails,picture,status" }, token);
+          if (thumbResult.thumbnails?.data?.[0]?.uri) {
+            thumbnailUrl = thumbResult.thumbnails.data[0].uri;
+            break;
+          } else if (thumbResult.picture) {
+            thumbnailUrl = thumbResult.picture;
+            break;
+          }
+        } catch (_) { /* video still processing */ }
+      }
+      logger.info(`Video thumbnail: ${thumbnailUrl ? "found" : "using default"}`);
       return { videoId, thumbnailUrl, type: "video" };
     } catch (error) {
-      const fbErr = error.response?.data?.error;
-      logger.error(`Video upload failed for ${id}: ${fbErr?.message || error.message}`);
-      throw { message: fbErr?.message || error.message };
+      const msg = error.response?.data?.error?.message || error.message;
+      logger.error(`Video upload failed for ${id}: ${msg}`);
+      throw new Error(`Video upload failed: ${msg}`);
     }
   }
 
-  /**
-   * Smart upload — detects image vs video by filename extension
-   */
   async uploadCreativeFromBuffer(accountId, buffer, filename, token = null) {
     const ext = (filename || "").toLowerCase().split(".").pop();
     const videoExts = ["mp4", "mov", "avi", "wmv", "flv", "mkv", "webm", "m4v"];
-    
     if (videoExts.includes(ext)) {
       return this.uploadAdVideoFromBuffer(accountId, buffer, filename, token);
-    } else {
-      return this.uploadAdImageFromBuffer(accountId, buffer, filename, token);
     }
+    return this.uploadAdImageFromBuffer(accountId, buffer, filename, token);
   }
 
-  /* ══════════════════════════════════════════════════════════════
-     AD CREATIVE — with proper object_story_spec
-     ══════════════════════════════════════════════════════════════ */
+  /* ══════════════════════════════════════
+     AD CREATIVE
+     ══════════════════════════════════════ */
   async createAdCreative(accountId, data, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-    const link = data.url || data.link || "https://example.com";
+
+    if (!data.url) {
+      throw new Error("Ad creative requires a destination URL");
+    }
 
     const storySpec = { page_id: data.page_id };
 
     if (data.video_id) {
-      // VIDEO creative — use video_data
+      // VIDEO creative
       storySpec.video_data = {
         video_id: data.video_id,
-        message: data.primary_text || "Check this out!",
-        title: data.headline || "Learn More",
+        message: data.primary_text || "",
+        title: data.headline || "",
         link_description: data.description || "",
         call_to_action: {
           type: data.cta_type || "LEARN_MORE",
-          value: { link: link },
+          value: { link: data.url },
         },
       };
-      // REQUIRED: Facebook needs either image_hash or image_url for video thumbnail
       if (data.image_hash) {
         storySpec.video_data.image_hash = data.image_hash;
       } else if (data.thumbnail_url) {
         storySpec.video_data.image_url = data.thumbnail_url;
       }
     } else {
-      // IMAGE creative — use link_data
+      // IMAGE creative
       const linkData = {
-        link: link,
-        message: data.primary_text || "Check this out!",
-        name: data.headline || "Learn More",
+        link: data.url,
+        message: data.primary_text || "",
+        name: data.headline || "",
         call_to_action: {
           type: data.cta_type || "LEARN_MORE",
-          value: { link: link },
+          value: { link: data.url },
         },
       };
       if (data.description) linkData.description = data.description;
@@ -438,9 +560,9 @@ class FacebookService {
     return result;
   }
 
-  /* ══════════════════════════════════════════════════════════════
+  /* ══════════════════════════════════════
      AD CREATION
-     ══════════════════════════════════════════════════════════════ */
+     ══════════════════════════════════════ */
   async createAd(accountId, data, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
     const params = {
@@ -454,21 +576,22 @@ class FacebookService {
     return result;
   }
 
-  /* ══════════════════════════════════════════════════════════════
+  /* ══════════════════════════════════════
      BULK PUBLISH
-     ══════════════════════════════════════════════════════════════ */
+     ══════════════════════════════════════ */
   async bulkPublish(config, accountIds, options = {}, token = null) {
     const results = [];
-    const concurrency = options.concurrency || 2;
+    const concurrency = Math.min(options.concurrency || 2, 5);
     const delayMs = options.delayMs || 1500;
 
-    logger.info(`Bulk publish starting: "${config.name}" to ${accountIds.length} accounts`);
+    logger.info(`Bulk publish: "${config.name}" to ${accountIds.length} accounts (${config.objective}, ${config.budget_mode || "CBO"})`);
 
     for (let i = 0; i < accountIds.length; i += concurrency) {
       const batch = accountIds.slice(i, i + concurrency);
       const batchResults = await Promise.allSettled(
         batch.map(accId => this.publishToSingleAccount(accId, config, token))
       );
+
       for (let j = 0; j < batchResults.length; j++) {
         const accId = batch[j];
         const r = batchResults[j];
@@ -480,6 +603,8 @@ class FacebookService {
           errorDetail: r.status === "rejected" ? (r.reason?.detail || "") : null,
         });
       }
+
+      // Delay between batches to avoid rate limits
       if (i + concurrency < accountIds.length) {
         await new Promise(r => setTimeout(r, delayMs));
       }
@@ -492,29 +617,30 @@ class FacebookService {
   }
 
   /**
-   * Publish to ONE account — NEW STRUCTURE:
-   * 1 Campaign → N Ad Sets (each with own targeting) → M Ads per ad set (one per video)
-   * 
-   * config.budget_mode = "CBO" | "ABO"
-   * config.ad_sets = [
-   *   { name, audience_type, targeting, budget (for ABO) },
-   *   ...
-   * ]
-   * config.ad_variations = [{ primary_text, headline, description, cta, url, image_buffer, image_filename }]
-   * All videos go into EVERY ad set
+   * Publish to ONE account
+   *
+   * Structure: 1 Campaign -> N Ad Sets (each with own targeting) -> M Ads per set
+   *
+   * KEY FIXES:
+   * - CBO: budget ONLY on campaign, NEVER on ad sets
+   * - ABO: budget ONLY on ad sets, NEVER on campaign
+   * - Location is optional — if no countries specified, worldwide targeting
+   * - All objectives get correct optimization_goal and promoted_object
    */
   async publishToSingleAccount(accountId, config, token = null) {
     const id = accountId.startsWith("act_") ? accountId : `act_${accountId}`;
-    logger.info(`Publishing to ${id}... (${config.ad_sets?.length || 1} ad sets, ${config.ad_variations?.length || 0} creatives)`);
+    const budgetMode = config.budget_mode || "CBO";
 
-    // Step 0: Get Pixel — use override if provided, otherwise auto-detect
+    logger.info(`Publishing to ${id} (${config.objective}, ${budgetMode}, ${config.ad_sets?.length || 1} sets, ${config.ad_variations?.length || 0} creatives)`);
+
+    // Step 0: Get Pixel if needed
+    const objConfig = OBJECTIVE_CONFIG[config.objective] || OBJECTIVE_CONFIG.sales;
     let pixelId = config.pixel_id || null;
-    const needsPixel = ["conversions", "sales", "leads"].includes(config.objective);
-    if (needsPixel && !pixelId) {
+    if (objConfig.needsPixel && !pixelId) {
       pixelId = await this.getAccountPixel(id, token);
     }
     if (pixelId) {
-      logger.info(`Using pixel ${pixelId} for ${id}${config.pixel_id ? " (manual override)" : " (auto-detected)"}`);
+      logger.info(`Using pixel ${pixelId} for ${id}`);
     }
 
     // Step 1: Create Campaign
@@ -523,22 +649,32 @@ class FacebookService {
       objective: config.objective,
       status: config.publish_status || "PAUSED",
       bid_strategy: config.bid_strategy,
+      budget_mode: budgetMode,
     };
-    // CBO = budget on campaign, ABO = budget on each ad set
-    if (config.budget_mode === "CBO" || !config.budget_mode) {
-      if (config.budget_type === "daily") campaignParams.daily_budget = config.budget;
-      else campaignParams.lifetime_budget = config.budget;
+
+    // CBO: budget on campaign
+    if (budgetMode === "CBO") {
+      if (config.budget_type === "daily") {
+        campaignParams.daily_budget = config.budget;
+      } else {
+        campaignParams.lifetime_budget = config.budget;
+      }
     }
+    // ABO: NO budget on campaign
+
     const campaign = await this.createCampaign(id, campaignParams, token);
 
-    // Step 2: Upload ALL creatives ONCE for this account (reuse across ad sets)
+    // Step 2: Upload ALL creatives once for this account
     const uploadedCreatives = [];
     for (let i = 0; i < (config.ad_variations || []).length; i++) {
       const variation = config.ad_variations[i];
       let imageHash = null, videoId = null, thumbnailUrl = null;
 
       if (variation.image_buffer) {
-        const upload = await this.uploadCreativeFromBuffer(id, variation.image_buffer, variation.image_filename || "creative.jpg", token);
+        const upload = await this.uploadCreativeFromBuffer(
+          id, variation.image_buffer,
+          variation.image_filename || "creative.jpg", token
+        );
         if (upload.type === "video") {
           videoId = upload.videoId;
           thumbnailUrl = upload.thumbnailUrl;
@@ -549,7 +685,7 @@ class FacebookService {
       uploadedCreatives.push({ ...variation, imageHash, videoId, thumbnailUrl, index: i });
     }
 
-    // Step 3: Create Ad Sets — one per ad_sets entry (or 1 default)
+    // Step 3: Create Ad Sets
     const adSetsConfig = config.ad_sets && config.ad_sets.length > 0
       ? config.ad_sets
       : [{ name: "Ad Set", audience_type: "broad", targeting: config.targeting || {} }];
@@ -558,21 +694,31 @@ class FacebookService {
 
     for (let s = 0; s < adSetsConfig.length; s++) {
       const adSetConf = adSetsConfig[s];
-      
+
       const adsetParams = {
         campaign_id: campaign.id,
-        name: `${config.name} — ${adSetConf.name || "Ad Set " + (s + 1)}`,
+        name: `${config.name} - ${adSetConf.name || "Ad Set " + (s + 1)}`,
         objective: config.objective,
         targeting: adSetConf.targeting || config.targeting || {},
         status: config.publish_status || "PAUSED",
         pixel_id: pixelId,
+        budget_mode: budgetMode,
       };
 
-      // ABO = budget per ad set
-      if (config.budget_mode === "ABO" && adSetConf.budget) {
-        if (config.budget_type === "daily") adsetParams.daily_budget = adSetConf.budget;
-        else adsetParams.lifetime_budget = adSetConf.budget;
+      // ABO: budget on each ad set
+      if (budgetMode === "ABO") {
+        const adSetBudget = adSetConf.budget || config.budget;
+        if (config.budget_type === "daily") {
+          adsetParams.daily_budget = adSetBudget;
+        } else {
+          adsetParams.lifetime_budget = adSetBudget;
+        }
       }
+      // CBO: NO budget on ad sets
+
+      // Schedule
+      if (config.start_time) adsetParams.start_time = config.start_time;
+      if (config.end_time) adsetParams.end_time = config.end_time;
 
       const adset = await this.createAdSet(id, adsetParams, token);
 
@@ -581,7 +727,7 @@ class FacebookService {
         const cr = uploadedCreatives[c];
 
         const creative = await this.createAdCreative(id, {
-          name: `${config.name} — ${adSetConf.name || "Set" + (s + 1)} — Creative ${c + 1}`,
+          name: `${config.name} - ${adSetConf.name || "Set" + (s + 1)} - Creative ${c + 1}`,
           page_id: config.page_id,
           image_hash: cr.imageHash,
           video_id: cr.videoId,
@@ -589,42 +735,66 @@ class FacebookService {
           primary_text: cr.primary_text,
           headline: cr.headline,
           description: cr.description,
-          url: cr.url || config.url || "https://example.com",
+          url: cr.url || config.url,
           cta_type: mapCtaToApiType(cr.cta),
         }, token);
 
         const ad = await this.createAd(id, {
-          name: `${config.name} — ${adSetConf.name || "Set" + (s + 1)} — Ad ${c + 1}`,
+          name: `${config.name} - ${adSetConf.name || "Set" + (s + 1)} - Ad ${c + 1}`,
           adset_id: adset.id,
           creative_id: creative.id,
           status: config.publish_status || "PAUSED",
         }, token);
 
-        allAds.push({ adset_id: adset.id, adset_name: adSetConf.name, creative_id: creative.id, ad_id: ad.id });
+        allAds.push({
+          adset_id: adset.id,
+          adset_name: adSetConf.name,
+          creative_id: creative.id,
+          ad_id: ad.id,
+        });
       }
 
-      logger.info(`Ad Set "${adSetConf.name}" done: ${uploadedCreatives.length} ads created in ${id}`);
+      logger.info(`Ad Set "${adSetConf.name}" done: ${uploadedCreatives.length} ads in ${id}`);
     }
 
-    logger.info(`Published to ${id}: campaign=${campaign.id}, ${adSetsConfig.length} ad sets, ${allAds.length} total ads`);
-    return { campaign_id: campaign.id, ad_sets: adSetsConfig.length, total_ads: allAds.length, ads: allAds, account_id: id };
+    logger.info(`Published to ${id}: campaign=${campaign.id}, ${adSetsConfig.length} sets, ${allAds.length} total ads`);
+    return {
+      campaign_id: campaign.id,
+      ad_sets: adSetsConfig.length,
+      total_ads: allAds.length,
+      ads: allAds,
+      account_id: id,
+    };
   }
 
-  /* ── Interest Search ── */
+  /* ══════════════════════════════════════
+     INTEREST SEARCH
+     ══════════════════════════════════════ */
   async searchInterests(query, token = null) {
     const result = await this.graphRequest("GET", "/search", { type: "adinterest", q: query }, token);
     return result.data || [];
   }
 }
 
-/* ── CTA Mapping ── */
+/* ══════════════════════════════════════
+   CTA MAPPING
+   ══════════════════════════════════════ */
 function mapCtaToApiType(label) {
   const map = {
-    "Shop Now": "SHOP_NOW", "Learn More": "LEARN_MORE", "Sign Up": "SIGN_UP",
-    "Book Now": "BOOK_TRAVEL", "Contact Us": "CONTACT_US", "Get Offer": "GET_OFFER",
-    "Download": "DOWNLOAD", "Subscribe": "SUBSCRIBE", "Apply Now": "APPLY_NOW",
-    "Get Quote": "GET_QUOTE", "Order Now": "ORDER_NOW", "See Menu": "SEE_MENU",
-    "Watch More": "WATCH_MORE", "Send Message": "MESSAGE_PAGE",
+    "Shop Now": "SHOP_NOW",
+    "Learn More": "LEARN_MORE",
+    "Sign Up": "SIGN_UP",
+    "Book Now": "BOOK_TRAVEL",
+    "Contact Us": "CONTACT_US",
+    "Get Offer": "GET_OFFER",
+    "Download": "DOWNLOAD",
+    "Subscribe": "SUBSCRIBE",
+    "Apply Now": "APPLY_NOW",
+    "Get Quote": "GET_QUOTE",
+    "Order Now": "ORDER_NOW",
+    "See Menu": "SEE_MENU",
+    "Watch More": "WATCH_MORE",
+    "Send Message": "MESSAGE_PAGE",
   };
   return map[label] || "LEARN_MORE";
 }

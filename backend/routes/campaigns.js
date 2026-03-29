@@ -1,26 +1,21 @@
-/**
- * ══════════════════════════════════════════════════════════════
- * Routes: Campaigns — Bulk Publishing
- * ══════════════════════════════════════════════════════════════
- * 
- * POST /api/campaigns/publish      — Bulk publish to multiple accounts
- * POST /api/campaigns/publish-one  — Publish to a single account
- * POST /api/campaigns/validate     — Dry-run validation
- * GET  /api/campaigns/interests    — Search targeting interests
- */
-
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
+const axios = require("axios");
 const facebookService = require("../services/facebookService");
+const { broadcast } = require("../websocket/wsServer");
 const logger = require("../utils/logger");
 
-// Multer config for file uploads (images/videos)
+// Multer config — disk storage for large files, memory for reasonable ones
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max for videos
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB max per file
   fileFilter: (req, file, cb) => {
-    const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/quicktime", "video/x-msvideo", "video/x-ms-wmv", "video/webm", "video/x-matroska", "video/x-flv"];
+    const allowed = [
+      "image/jpeg", "image/png", "image/gif", "image/webp",
+      "video/mp4", "video/quicktime", "video/x-msvideo", "video/webm",
+      "video/x-matroska", "video/x-ms-wmv", "video/x-flv",
+    ];
     if (allowed.includes(file.mimetype)) {
       cb(null, true);
     } else {
@@ -30,53 +25,10 @@ const upload = multer({
 });
 
 /**
- * ─────────────────────────────────────────────
- * POST /api/campaigns/publish
- * ─────────────────────────────────────────────
- * 
- * THE MAIN ENDPOINT — publishes a complete campaign to multiple ad accounts
- * 
- * Body (multipart/form-data):
- * - config: JSON string with campaign configuration
- * - creatives: image/video files (up to 10)
- * 
- * Config JSON structure:
- * {
- *   name: "Campaign Name",
- *   objective: "conversions",
- *   budget: 50,
- *   budget_type: "daily",
- *   bid_strategy: "LOWEST_COST_WITHOUT_CAP",
- *   start_time: "2025-01-01T00:00:00Z",
- *   end_time: "2025-01-31T23:59:59Z",
- *   publish_status: "PAUSED",
- *   page_id: "123456789",
- *   account_ids: ["act_111", "act_222", "act_333"],
- *   targeting: {
- *     geo_locations: { countries: ["US", "CA"] },
- *     age_min: 18,
- *     age_max: 65,
- *     genders: [1, 2],
- *     interests: [{ id: "123", name: "Shopping" }]
- *   },
- *   publisher_platforms: ["facebook", "instagram"],
- *   facebook_positions: ["feed", "story", "reel"],
- *   instagram_positions: ["stream", "story", "reels"],
- *   ad_variations: [
- *     {
- *       primary_text: "Ad copy here...",
- *       headline: "Big Headline",
- *       description: "Description text",
- *       cta: "Shop Now",
- *       url: "https://example.com",
- *       creative_index: 0   // Index of uploaded file to use
- *     }
- *   ]
- * }
+ * POST /api/campaigns/publish — Bulk publish to multiple accounts
  */
 router.post("/publish", upload.array("creatives", 10), async (req, res) => {
   try {
-    // Parse campaign config from form data
     let config;
     try {
       config = JSON.parse(req.body.config);
@@ -85,51 +37,111 @@ router.post("/publish", upload.array("creatives", 10), async (req, res) => {
     }
 
     // Validation
-    if (!config.name) {
-      return res.status(400).json({ success: false, error: "Campaign name is required" });
+    const errors = [];
+    if (!config.name) errors.push("Campaign name is required");
+    if (!config.objective) errors.push("Objective is required");
+    if (!config.account_ids || config.account_ids.length === 0) errors.push("Select at least one ad account");
+    if (!config.ad_variations || config.ad_variations.length === 0) errors.push("At least one ad variation required");
+    if (!config.page_id) errors.push("Facebook Page is required");
+
+    // Validate budget
+    const budget = Number(config.budget);
+    if (!budget || budget <= 0) errors.push("Budget must be greater than 0");
+
+    // Validate ad variations have copy
+    for (let i = 0; i < (config.ad_variations || []).length; i++) {
+      const v = config.ad_variations[i];
+      if (!v.primary_text) errors.push(`Variation ${i + 1}: Primary text required`);
+      if (!v.headline) errors.push(`Variation ${i + 1}: Headline required`);
+      if (!v.url) errors.push(`Variation ${i + 1}: URL required`);
     }
-    if (!config.objective) {
-      return res.status(400).json({ success: false, error: "Campaign objective is required" });
+
+    // Limit accounts
+    if (config.account_ids && config.account_ids.length > 50) {
+      errors.push("Maximum 50 accounts per publish");
     }
-    if (!config.account_ids || config.account_ids.length === 0) {
-      return res.status(400).json({ success: false, error: "At least one ad account must be selected" });
-    }
-    if (!config.ad_variations || config.ad_variations.length === 0) {
-      return res.status(400).json({ success: false, error: "At least one ad variation is required" });
-    }
-    if (!config.page_id) {
-      return res.status(400).json({ success: false, error: "A Facebook Page ID is required for ad creative" });
+
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors });
     }
 
     // Attach uploaded file buffers to ad variations
     const files = req.files || [];
     for (const variation of config.ad_variations) {
       const fileIndex = variation.creative_index ?? 0;
-      if (files[fileIndex]) {
+      if (fileIndex >= 0 && fileIndex < files.length) {
         variation.image_buffer = files[fileIndex].buffer;
         variation.image_filename = files[fileIndex].originalname;
       }
     }
 
     logger.info("Starting bulk publish", {
-      campaignName: config.name,
-      accountCount: config.account_ids.length,
-      variationCount: config.ad_variations.length,
+      campaign: config.name,
+      objective: config.objective,
+      budgetMode: config.budget_mode || "CBO",
+      accounts: config.account_ids.length,
+      variations: config.ad_variations.length,
     });
 
-    // Execute bulk publish
-    const results = await facebookService.bulkPublish(
-      config,
-      config.account_ids,
-      {
-        concurrency: config.concurrency || 3,
-        delayMs: config.delay_ms || 1000,
-      },
-      req.fbToken
-    );
+    // Broadcast start
+    broadcast({
+      event: "publish:start",
+      campaign: config.name,
+      totalAccounts: config.account_ids.length,
+    });
 
-    const successCount = results.filter((r) => r.success).length;
-    const failCount = results.filter((r) => !r.success).length;
+    // Execute bulk publish with progress tracking
+    const results = [];
+    const accountIds = config.account_ids;
+    const concurrency = Math.min(config.concurrency || 2, 5);
+    const delayMs = config.delay_ms || 1500;
+
+    for (let i = 0; i < accountIds.length; i += concurrency) {
+      const batch = accountIds.slice(i, i + concurrency);
+      const batchResults = await Promise.allSettled(
+        batch.map(accId => facebookService.publishToSingleAccount(accId, config, req.fbToken))
+      );
+
+      for (let j = 0; j < batchResults.length; j++) {
+        const accId = batch[j];
+        const r = batchResults[j];
+        const result = {
+          accountId: accId,
+          success: r.status === "fulfilled",
+          data: r.status === "fulfilled" ? r.value : null,
+          error: r.status === "rejected" ? (r.reason?.message || "Unknown error") : null,
+          errorDetail: r.status === "rejected" ? (r.reason?.detail || "") : null,
+        };
+        results.push(result);
+
+        // Broadcast per-account result
+        broadcast({
+          event: "publish:account",
+          ...result,
+          index: results.length,
+          total: accountIds.length,
+        });
+      }
+
+      // Progress
+      const percentage = Math.round((results.length / accountIds.length) * 100);
+      broadcast({ event: "publish:progress", percentage, completed: results.length, total: accountIds.length });
+
+      if (i + concurrency < accountIds.length) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+    const failCount = results.filter(r => !r.success).length;
+
+    // Broadcast completion
+    broadcast({
+      event: "publish:complete",
+      campaign: config.name,
+      successful: successCount,
+      failed: failCount,
+    });
 
     res.json({
       success: true,
@@ -143,19 +155,13 @@ router.post("/publish", upload.array("creatives", 10), async (req, res) => {
     });
   } catch (error) {
     logger.error("Bulk publish failed", { error: error.message });
-    res.status(500).json({
-      success: false,
-      error: error.message || "Bulk publish failed",
-    });
+    broadcast({ event: "publish:error", error: error.message });
+    res.status(500).json({ success: false, error: error.message || "Bulk publish failed" });
   }
 });
 
 /**
- * ─────────────────────────────────────────────
- * POST /api/campaigns/publish-one
- * ─────────────────────────────────────────────
- * 
- * Publish to a SINGLE ad account (for testing / retry)
+ * POST /api/campaigns/publish-one — Publish to a single account
  */
 router.post("/publish-one", upload.array("creatives", 10), async (req, res) => {
   try {
@@ -169,23 +175,20 @@ router.post("/publish-one", upload.array("creatives", 10), async (req, res) => {
     if (!config.account_id) {
       return res.status(400).json({ success: false, error: "account_id is required" });
     }
+    if (!config.page_id) {
+      return res.status(400).json({ success: false, error: "page_id is required" });
+    }
 
-    // Attach files
     const files = req.files || [];
     for (const variation of config.ad_variations || []) {
       const fileIndex = variation.creative_index ?? 0;
-      if (files[fileIndex]) {
+      if (fileIndex >= 0 && fileIndex < files.length) {
         variation.image_buffer = files[fileIndex].buffer;
         variation.image_filename = files[fileIndex].originalname;
       }
     }
 
-    const result = await facebookService.publishToSingleAccount(
-      config.account_id,
-      config,
-      req.fbToken
-    );
-
+    const result = await facebookService.publishToSingleAccount(config.account_id, config, req.fbToken);
     res.json({ success: true, result });
   } catch (error) {
     logger.error("Single publish failed", { error: error.message });
@@ -194,11 +197,7 @@ router.post("/publish-one", upload.array("creatives", 10), async (req, res) => {
 });
 
 /**
- * ─────────────────────────────────────────────
- * POST /api/campaigns/validate
- * ─────────────────────────────────────────────
- * 
- * Validate campaign config WITHOUT publishing (dry run)
+ * POST /api/campaigns/validate — Dry-run validation
  */
 router.post("/validate", async (req, res) => {
   const config = req.body;
@@ -206,40 +205,32 @@ router.post("/validate", async (req, res) => {
 
   if (!config.name) errors.push("Campaign name is required");
   if (!config.objective) errors.push("Objective is required");
-  if (!config.budget || config.budget <= 0) errors.push("Valid budget is required");
-  if (!config.account_ids || config.account_ids.length === 0) errors.push("Select at least one ad account");
+  if (!config.budget || Number(config.budget) <= 0) errors.push("Valid budget required");
+  if (!config.account_ids || config.account_ids.length === 0) errors.push("Select at least one account");
   if (!config.ad_variations || config.ad_variations.length === 0) errors.push("At least one ad variation needed");
-  if (!config.page_id) errors.push("Facebook Page ID is required");
+  if (!config.page_id) errors.push("Facebook Page is required");
+
+  if (config.budget_type === "daily" && Number(config.budget) < 1) {
+    errors.push("Daily budget must be at least $1.00");
+  }
+  if (config.account_ids?.length > 50) {
+    errors.push("Maximum 50 accounts per publish");
+  }
 
   for (let i = 0; i < (config.ad_variations || []).length; i++) {
     const v = config.ad_variations[i];
-    if (!v.primary_text) errors.push(`Variation ${i + 1}: Primary text is required`);
-    if (!v.headline) errors.push(`Variation ${i + 1}: Headline is required`);
-  }
-
-  // Validate budget limits
-  if (config.budget_type === "daily" && config.budget < 1) {
-    errors.push("Daily budget must be at least $1.00");
-  }
-
-  // Check account limit
-  if (config.account_ids?.length > 50) {
-    errors.push("Maximum 50 accounts per bulk publish");
+    if (!v.primary_text) errors.push(`Variation ${i + 1}: Primary text required`);
+    if (!v.headline) errors.push(`Variation ${i + 1}: Headline required`);
   }
 
   if (errors.length > 0) {
-    return res.json({ valid: false, errors });
+    return res.status(400).json({ valid: false, errors });
   }
-
-  res.json({ valid: true, errors: [], message: "Campaign configuration is valid" });
+  res.json({ valid: true, errors: [], message: "Configuration is valid" });
 });
 
 /**
- * ─────────────────────────────────────────────
- * GET /api/campaigns/interests?q={query}
- * ─────────────────────────────────────────────
- * 
- * Search Facebook's interest targeting database
+ * GET /api/campaigns/interests?q={query} — Search interests
  */
 router.get("/interests", async (req, res) => {
   try {
@@ -251,7 +242,7 @@ router.get("/interests", async (req, res) => {
     const interests = await facebookService.searchInterests(query, req.fbToken);
     res.json({
       success: true,
-      interests: interests.map((i) => ({
+      interests: interests.map(i => ({
         id: i.id,
         name: i.name,
         audience_size_lower_bound: i.audience_size_lower_bound,
@@ -260,52 +251,66 @@ router.get("/interests", async (req, res) => {
       })),
     });
   } catch (error) {
-    logger.error("Interest search failed", { error: error.message });
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, error: "Interest search failed" });
   }
 });
 
 /**
- * ─────────────────────────────────────────────
- * POST /api/campaigns/generate-copy
- * ─────────────────────────────────────────────
- * 
- * AI Ad Copy Generator — fetches landing page, sends to Claude API
- * Returns 3 high-converting ad copy variations with emojis
+ * POST /api/campaigns/generate-copy — AI Ad Copy Generator
  */
 router.post("/generate-copy", async (req, res) => {
   try {
     const { url, objective } = req.body;
     if (!url) return res.status(400).json({ success: false, error: "URL is required" });
 
-    logger.info("AI Copy: Fetching landing page", { url });
+    // Validate URL format
+    try {
+      const parsed = new URL(url);
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        return res.status(400).json({ success: false, error: "URL must start with http:// or https://" });
+      }
+      // Block internal/private IPs
+      const hostname = parsed.hostname;
+      if (hostname === "localhost" || hostname.startsWith("127.") || hostname.startsWith("10.") ||
+          hostname.startsWith("172.") || hostname.startsWith("192.168.") || hostname === "169.254.169.254") {
+        return res.status(400).json({ success: false, error: "Internal URLs are not allowed" });
+      }
+    } catch (_) {
+      return res.status(400).json({ success: false, error: "Invalid URL format" });
+    }
 
-    // Step 1: Fetch landing page content
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return res.status(400).json({ success: false, error: "ANTHROPIC_API_KEY not configured. Add it to your environment variables." });
+    }
+
+    // Fetch landing page content
     let pageContent = "";
     try {
-      const axios = require("axios");
-      const response = await axios.get(url, { timeout: 10000, headers: { "User-Agent": "Mozilla/5.0" } });
-      // Extract text content from HTML (simple strip tags)
+      const response = await axios.get(url, {
+        timeout: 10000,
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; BulkAdsPro/3.0)" },
+        maxRedirects: 3,
+      });
       pageContent = response.data
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
         .replace(/<[^>]+>/g, " ")
         .replace(/\s+/g, " ")
         .trim()
-        .substring(0, 3000); // Limit to 3000 chars
+        .substring(0, 3000);
     } catch (e) {
-      pageContent = "Landing page URL: " + url + " (could not fetch content)";
-      logger.warn("Could not fetch landing page: " + e.message);
+      pageContent = `Landing page URL: ${url} (could not fetch content)`;
+      logger.warn("Could not fetch landing page", { url, error: e.message });
     }
 
-    // Step 2: Call Claude API to generate ad copy
-    const axios = require("axios");
+    // Call Claude API
     const claudeResponse = await axios.post("https://api.anthropic.com/v1/messages", {
       model: "claude-sonnet-4-20250514",
       max_tokens: 1000,
       messages: [{
         role: "user",
-        content: `You are an expert Facebook Ads copywriter who writes high-converting ad copy. Analyze this landing page content and write 3 different ad copy variations.
+        content: `You are an expert Facebook Ads copywriter. Analyze this landing page and write 3 ad copy variations.
 
 LANDING PAGE CONTENT:
 ${pageContent}
@@ -314,65 +319,47 @@ URL: ${url}
 CAMPAIGN OBJECTIVE: ${objective || "sales"}
 
 RULES:
-- Use emojis extensively (2-4 per text)
-- Write hooks that stop the scroll
-- Include urgency/scarcity when appropriate
-- Keep primary text under 200 characters
-- Keep headlines under 40 characters  
-- Keep descriptions under 60 characters
-- Make it feel personal and conversational
+- Use emojis (2-4 per text)
+- Write scroll-stopping hooks
+- Include urgency when appropriate
+- Primary text under 200 characters
+- Headlines under 40 characters
+- Descriptions under 60 characters
 - Focus on benefits, not features
 
-Respond ONLY with this exact JSON format, no other text:
+Respond ONLY with this JSON format, no other text:
 [
-  {
-    "primaryText": "emoji + high converting ad text here",
-    "headline": "Short punchy headline",
-    "description": "Brief description with benefit"
-  },
-  {
-    "primaryText": "second variation with different angle",
-    "headline": "Different headline approach", 
-    "description": "Another benefit focused description"
-  },
-  {
-    "primaryText": "third variation urgency/social proof angle",
-    "headline": "Urgency or social proof headline",
-    "description": "FOMO or trust building description"
-  }
+  {"primaryText": "...", "headline": "...", "description": "..."},
+  {"primaryText": "...", "headline": "...", "description": "..."},
+  {"primaryText": "...", "headline": "...", "description": "..."}
 ]`
-      }]
+      }],
     }, {
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY || "",
-        "anthropic-version": "2023-06-01"
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
       },
-      timeout: 30000
+      timeout: 30000,
     });
 
-    // Parse Claude's response
     const text = claudeResponse.data.content[0]?.text || "[]";
     let variations;
     try {
-      // Clean any markdown fences
       const clean = text.replace(/```json|```/g, "").trim();
       variations = JSON.parse(clean);
     } catch (e) {
-      logger.error("Failed to parse AI response: " + text.substring(0, 200));
-      return res.json({ success: false, error: "AI returned invalid format" });
+      logger.error("Failed to parse AI response");
+      return res.status(502).json({ success: false, error: "AI returned invalid format" });
     }
 
-    logger.info("AI Copy: Generated " + variations.length + " variations");
     res.json({ success: true, variations });
-
   } catch (error) {
     logger.error("AI copy generation failed", { error: error.message });
-    // If no API key, return helpful message
     if (error.response?.status === 401) {
-      return res.json({ success: false, error: "Add ANTHROPIC_API_KEY to your environment variables to use AI copy generation" });
+      return res.status(401).json({ success: false, error: "Invalid ANTHROPIC_API_KEY" });
     }
-    res.json({ success: false, error: error.message || "AI generation failed" });
+    res.status(500).json({ success: false, error: "AI generation failed" });
   }
 });
 
