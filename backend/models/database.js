@@ -66,6 +66,15 @@ const AccountGroup = sequelize.define("AccountGroup", {
   accountIds: { type: DataTypes.JSON, defaultValue: [] },
 });
 
+const User = sequelize.define("User", {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  name: { type: DataTypes.STRING, allowNull: false },
+  email: { type: DataTypes.STRING, allowNull: false, unique: true },
+  password: { type: DataTypes.STRING, allowNull: false },
+  role: { type: DataTypes.STRING, defaultValue: "user" },
+  lastLogin: DataTypes.DATE,
+});
+
 const Credential = sequelize.define("Credential", {
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
   businessId: { type: DataTypes.STRING, unique: true, allowNull: false },
@@ -119,4 +128,4 @@ async function closeDatabase() {
   }
 }
 
-module.exports = { sequelize, Campaign, Template, AccountGroup, Credential, initDatabase, closeDatabase };
+module.exports = { sequelize, User, Campaign, Template, AccountGroup, Credential, initDatabase, closeDatabase };
