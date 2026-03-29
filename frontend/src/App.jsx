@@ -250,77 +250,29 @@ export default function App() {
     notifTimer.current = setTimeout(() => setNotif(null), 3500);
   }, []);
 
-  /* ── User Auth ── */
-  const [user, setUser] = useState(null);
-  const [authMode, setAuthMode] = useState("login"); // "login" or "signup"
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPass, setAuthPass] = useState("");
-  const [authName, setAuthName] = useState("");
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState("");
-  const [authChecked, setAuthChecked] = useState(false);
+  /* ── Password Gate ── */
+  const DASHBOARD_PASSWORD = "adsmit2026";
+  const [unlocked, setUnlocked] = useState(false);
+  const [gatePass, setGatePass] = useState("");
+  const [gateError, setGateError] = useState("");
 
-  // Check for existing JWT on mount
   useEffect(() => {
-    const token = localStorage.getItem("jwt");
-    if (token) {
-      fetch(`${API}/api/user/me`, { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => r.json())
-        .then(d => { if (d.success) setUser(d.user); })
-        .catch(() => {})
-        .finally(() => setAuthChecked(true));
-    } else {
-      setAuthChecked(true);
-    }
+    if (localStorage.getItem("dash_unlocked") === "true") setUnlocked(true);
   }, []);
 
-  const handleLogin = async () => {
-    if (!authEmail || !authPass) { setAuthError("Email and password required"); return; }
-    setAuthLoading(true); setAuthError("");
-    try {
-      const r = await fetch(`${API}/api/user/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: authEmail, password: authPass }),
-      });
-      const d = await r.json();
-      if (d.success) {
-        localStorage.setItem("jwt", d.token);
-        setUser(d.user);
-        setAuthEmail(""); setAuthPass("");
-      } else {
-        setAuthError(d.error || "Login failed");
-      }
-    } catch (e) { setAuthError("Connection failed"); }
-    setAuthLoading(false);
+  const handleUnlock = () => {
+    if (gatePass === DASHBOARD_PASSWORD) {
+      setUnlocked(true);
+      localStorage.setItem("dash_unlocked", "true");
+      setGateError("");
+    } else {
+      setGateError("Wrong password");
+    }
   };
 
-  const handleSignup = async () => {
-    if (!authName || !authEmail || !authPass) { setAuthError("All fields are required"); return; }
-    if (authPass.length < 6) { setAuthError("Password must be at least 6 characters"); return; }
-    setAuthLoading(true); setAuthError("");
-    try {
-      const r = await fetch(`${API}/api/user/signup`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: authName, email: authEmail, password: authPass }),
-      });
-      const d = await r.json();
-      if (d.success) {
-        localStorage.setItem("jwt", d.token);
-        setUser(d.user);
-        setAuthEmail(""); setAuthPass(""); setAuthName("");
-      } else {
-        setAuthError(d.error || "Signup failed");
-      }
-    } catch (e) { setAuthError("Connection failed"); }
-    setAuthLoading(false);
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem("jwt");
-    setUser(null);
-    setAuthMode("login");
+  const handleLock = () => {
+    setUnlocked(false);
+    localStorage.removeItem("dash_unlocked");
   };
 
   /* ── API Connection ── */
@@ -1834,87 +1786,32 @@ export default function App() {
      ══════════════════════════════════════ */
   const pages = { dashboard: renderDashboard, create: renderCreate, campaigns: renderCampaigns, templates: renderTemplates, accounts: renderAccounts, settings: renderSettings };
 
-  // Loading state
-  if (!authChecked) {
-    return (
-      <div style={{ ...S.layout, alignItems: "center", justifyContent: "center" }}>
-        <style>{CSS}</style>
-        <div style={{ textAlign: "center", animation: "fi .3s ease" }}>
-          <div style={{ width: 44, height: 44, borderRadius: 10, background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 900, color: "#fff", margin: "0 auto 12px" }}>B</div>
-          <div style={{ fontSize: 14, fontWeight: 700 }}>Loading...</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Login/Signup Screen
-  if (!user) {
+  // Password Gate
+  if (!unlocked) {
     return (
       <div style={{ ...S.layout, alignItems: "center", justifyContent: "center", padding: 20 }}>
         <style>{CSS}</style>
-        <div style={{ width: "100%", maxWidth: 420, animation: "fi .3s ease" }}>
-          {/* Logo */}
+        <div style={{ width: "100%", maxWidth: 400, animation: "fi .3s ease" }}>
           <div style={{ textAlign: "center", marginBottom: 32 }}>
-            <div style={{ width: 52, height: 52, borderRadius: 12, background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 900, color: "#fff", margin: "0 auto 14px" }}>B</div>
-            <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.5px" }}>BulkAds<span style={{ color: T.ac }}> Pro</span></div>
-            <div style={{ fontSize: 12, color: T.ac2, marginTop: 4, letterSpacing: ".6px", fontWeight: 700 }}>by Adsmit Solutions</div>
+            <div style={{ width: 56, height: 56, borderRadius: 14, background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 900, color: "#fff", margin: "0 auto 16px" }}>B</div>
+            <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.5px" }}>BulkAds<span style={{ color: T.ac }}> Pro</span></div>
+            <div style={{ fontSize: 13, color: T.ac2, marginTop: 4, letterSpacing: ".6px", fontWeight: 700 }}>by Adsmit Solutions</div>
           </div>
-
-          {/* Auth Card */}
           <div style={{ ...S.card, padding: 28 }}>
-            {/* Tabs */}
-            <div style={{ display: "flex", gap: 0, marginBottom: 24, background: "rgba(255,255,255,.03)", borderRadius: 8, padding: 3, border: `1px solid ${T.bd}` }}>
-              {["login", "signup"].map(m => (
-                <button key={m} onClick={() => { setAuthMode(m); setAuthError(""); }} style={{
-                  flex: 1, padding: "9px 0", borderRadius: 6, fontSize: 13, fontWeight: 600, border: "none", fontFamily: FNT, cursor: "pointer",
-                  background: authMode === m ? T.grad : "transparent", color: authMode === m ? "#fff" : T.txM, transition: "all .15s",
-                }}>
-                  {m === "login" ? "Log In" : "Sign Up"}
-                </button>
-              ))}
-            </div>
-
-            {authMode === "signup" && (
-              <div style={{ marginBottom: 14 }}>
-                <label style={S.lbl}>Full Name</label>
-                <input style={S.inp} value={authName} onChange={e => setAuthName(e.target.value)} placeholder="Your name" onKeyDown={e => e.key === "Enter" && handleSignup()} />
-              </div>
-            )}
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={S.lbl}>Email</label>
-              <input style={S.inp} type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@company.com" onKeyDown={e => e.key === "Enter" && (authMode === "login" ? handleLogin() : handleSignup())} />
-            </div>
-
             <div style={{ marginBottom: 18 }}>
-              <label style={S.lbl}>Password</label>
-              <input style={S.inp} type="password" value={authPass} onChange={e => setAuthPass(e.target.value)} placeholder={authMode === "signup" ? "Min 6 characters" : "Your password"} onKeyDown={e => e.key === "Enter" && (authMode === "login" ? handleLogin() : handleSignup())} />
+              <label style={S.lbl}>Enter Password</label>
+              <input style={{ ...S.inp, textAlign: "center", fontSize: 16, padding: "12px 16px", letterSpacing: "2px" }} type="password" value={gatePass} onChange={e => setGatePass(e.target.value)} placeholder="••••••••" autoFocus onKeyDown={e => e.key === "Enter" && handleUnlock()} />
             </div>
-
-            {authError && (
-              <div style={{ padding: 10, borderRadius: 8, background: "rgba(239,68,68,.06)", border: "1px solid rgba(239,68,68,.15)", color: T.err, fontSize: 12, marginBottom: 14 }}>{authError}</div>
-            )}
-
-            <Btn onClick={authMode === "login" ? handleLogin : handleSignup} disabled={authLoading} style={{ width: "100%", justifyContent: "center", padding: "11px 0", fontSize: 14 }}>
-              {authLoading ? (authMode === "login" ? "Logging in..." : "Creating account...") : (authMode === "login" ? "Log In" : "Create Account")}
-            </Btn>
-
-            <div style={{ textAlign: "center", marginTop: 16, fontSize: 12, color: T.txD }}>
-              {authMode === "login" ? (
-                <>Don't have an account? <span style={{ color: T.ac, cursor: "pointer", fontWeight: 600 }} onClick={() => { setAuthMode("signup"); setAuthError(""); }}>Sign up</span></>
-              ) : (
-                <>Already have an account? <span style={{ color: T.ac, cursor: "pointer", fontWeight: 600 }} onClick={() => { setAuthMode("login"); setAuthError(""); }}>Log in</span></>
-              )}
-            </div>
+            {gateError && <div style={{ padding: 10, borderRadius: 8, background: "rgba(239,68,68,.06)", border: "1px solid rgba(239,68,68,.15)", color: T.err, fontSize: 12, marginBottom: 14, textAlign: "center" }}>{gateError}</div>}
+            <Btn onClick={handleUnlock} style={{ width: "100%", justifyContent: "center", padding: "12px 0", fontSize: 14 }}>Unlock Dashboard</Btn>
           </div>
-
           <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: T.txD }}>Bulk Facebook Ads Publishing Platform</div>
         </div>
       </div>
     );
   }
 
-  // Main Dashboard (authenticated)
+  // Main Dashboard
   return (
     <div style={S.layout}>
       <style>{CSS}</style>
@@ -1941,10 +1838,10 @@ export default function App() {
           ))}
         </div>
         <div style={{ padding: "10px 6px", borderTop: `1px solid ${T.bd}`, display: "flex", flexDirection: "column", gap: 2 }}>
-          {sbOpen && user && (
+          {sbOpen && (
             <div style={{ padding: "6px 12px", fontSize: 11, color: T.txM, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontWeight: 600, color: T.tx }}>{user.name}</span>
-              <span style={{ cursor: "pointer", color: T.err, fontSize: 10, fontWeight: 600 }} onClick={handleLogout}>Logout</span>
+              <span style={{ fontWeight: 600, color: T.ac2 }}>Adsmit Solutions</span>
+              <span style={{ cursor: "pointer", color: T.err, fontSize: 10, fontWeight: 600 }} onClick={handleLock}>Lock</span>
             </div>
           )}
           <button style={{ display: "flex", alignItems: "center", gap: 10, padding: sbOpen ? "8px 12px" : "8px 0", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 500, background: "transparent", color: T.txM, border: "none", fontFamily: FNT, width: "100%", justifyContent: sbOpen ? "flex-start" : "center" }} onClick={() => setSbOpen(!sbOpen)}>
@@ -1961,7 +1858,7 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {wsConnected && <span style={{ fontSize: 10.5, color: T.ok, display: "flex", alignItems: "center", gap: 5 }}><Ic t="ws" sz={12} /> Live</span>}
             {apiConnected && <span style={{ fontSize: 10.5, color: T.ok, display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: T.ok }} />{accounts.length} accounts</span>}
-            <div style={{ width: 30, height: 30, borderRadius: "50%", background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11.5, fontWeight: 700, color: "#fff", cursor: "pointer" }} title={user?.name || "User"}>{(user?.name || "U").charAt(0).toUpperCase()}</div>
+            <div style={{ width: 30, height: 30, borderRadius: "50%", background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11.5, fontWeight: 700, color: "#fff" }}>A</div>
           </div>
         </div>
         {pages[pg]?.()}
