@@ -375,15 +375,23 @@ class FacebookService {
       targeting.genders = data.targeting.genders;
     }
 
-    // Interests
+    // Interests — resolve names to real Facebook IDs if needed
     if (data.targeting?.interests && data.targeting.interests.length > 0) {
-      targeting.flexible_spec = [{ interests: data.targeting.interests }];
+      const resolved = await this.resolveInterestIds(data.targeting.interests, token);
+      if (resolved.length > 0) {
+        targeting.flexible_spec = [{ interests: resolved }];
+      }
     }
 
     // Custom audiences
     if (data.targeting?.custom_audiences && data.targeting.custom_audiences.length > 0) {
       targeting.custom_audiences = data.targeting.custom_audiences;
     }
+
+    // Advantage+ audience — REQUIRED by Facebook
+    // When enabled, age_max MUST be 65
+    targeting.targeting_automation = { advantage_audience: 1 };
+    targeting.age_max = 65;
 
     // ── Build ad set params ──
     const params = {
@@ -771,11 +779,39 @@ class FacebookService {
   }
 
   /* ══════════════════════════════════════
-     INTEREST SEARCH
+     INTEREST SEARCH + RESOLVE
      ══════════════════════════════════════ */
   async searchInterests(query, token = null) {
     const result = await this.graphRequest("GET", "/search", { type: "adinterest", q: query }, token);
     return result.data || [];
+  }
+
+  /**
+   * Resolve interest names to real Facebook IDs.
+   * AI suggestions may use names without valid IDs — this searches Facebook
+   * for each name and returns the best match with a real ID.
+   */
+  async resolveInterestIds(interests, token = null) {
+    const resolved = [];
+    for (const interest of interests) {
+      // If it already has a valid numeric ID (from the search endpoint), keep it
+      if (interest.id && /^\d+$/.test(String(interest.id))) {
+        resolved.push({ id: String(interest.id), name: interest.name });
+        continue;
+      }
+      // Otherwise search for the name to get a real ID
+      try {
+        const results = await this.searchInterests(interest.name, token);
+        if (results.length > 0) {
+          resolved.push({ id: results[0].id, name: results[0].name });
+        } else {
+          logger.warn(`Interest not found: "${interest.name}" — skipping`);
+        }
+      } catch (e) {
+        logger.warn(`Interest search failed for "${interest.name}": ${e.message}`);
+      }
+    }
+    return resolved;
   }
 }
 
