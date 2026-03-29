@@ -255,6 +255,142 @@ router.get("/interests", async (req, res) => {
   }
 });
 
+/* ── AI Helper: validate URL + fetch page content ── */
+function validateUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "URL must start with http:// or https://";
+    const h = parsed.hostname;
+    if (h === "localhost" || h.startsWith("127.") || h.startsWith("10.") || h.startsWith("172.") || h.startsWith("192.168.") || h === "169.254.169.254") return "Internal URLs not allowed";
+    return null;
+  } catch (_) { return "Invalid URL format"; }
+}
+
+async function fetchPageContent(url) {
+  try {
+    const response = await axios.get(url, { timeout: 10000, headers: { "User-Agent": "Mozilla/5.0 (compatible; BulkAdsPro/3.0)" }, maxRedirects: 3 });
+    return response.data.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "").replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().substring(0, 3000);
+  } catch (_) { return `Landing page URL: ${url} (could not fetch content)`; }
+}
+
+async function callClaude(prompt) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
+  const r = await axios.post("https://api.anthropic.com/v1/messages", {
+    model: "claude-sonnet-4-20250514", max_tokens: 1000,
+    messages: [{ role: "user", content: prompt }],
+  }, {
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    timeout: 30000,
+  });
+  return r.data.content[0]?.text || "";
+}
+
+/**
+ * POST /api/campaigns/generate-name — AI Campaign Namer
+ */
+router.post("/generate-name", async (req, res) => {
+  try {
+    const { url, objective } = req.body;
+    if (!url) return res.status(400).json({ success: false, error: "URL is required" });
+    const urlErr = validateUrl(url);
+    if (urlErr) return res.status(400).json({ success: false, error: urlErr });
+
+    const pageContent = await fetchPageContent(url);
+    const text = await callClaude(`You are a Facebook Ads campaign naming expert. Analyze this landing page and generate 5 campaign name suggestions.
+
+LANDING PAGE: ${pageContent}
+URL: ${url}
+OBJECTIVE: ${objective || "sales"}
+TODAY: ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+
+RULES:
+- Names should be short (3-6 words max)
+- Include product/brand name
+- Include objective hint (e.g. "Sales", "Traffic", "Leads")
+- Include date or season reference
+- Format: "Brand - Product - Objective - Date"
+- Make them professional and organized
+
+Respond ONLY with this JSON, no other text:
+[
+  {"name": "campaign name 1"},
+  {"name": "campaign name 2"},
+  {"name": "campaign name 3"},
+  {"name": "campaign name 4"},
+  {"name": "campaign name 5"}
+]`);
+
+    const clean = text.replace(/```json|```/g, "").trim();
+    const names = JSON.parse(clean);
+    res.json({ success: true, names });
+  } catch (error) {
+    logger.error("AI name generation failed", { error: error.message });
+    if (error.response?.status === 401) return res.status(401).json({ success: false, error: "Invalid ANTHROPIC_API_KEY" });
+    res.status(500).json({ success: false, error: error.message || "AI generation failed" });
+  }
+});
+
+/**
+ * POST /api/campaigns/suggest-audience — AI Audience Recommender
+ */
+router.post("/suggest-audience", async (req, res) => {
+  try {
+    const { url, objective, country } = req.body;
+    if (!url) return res.status(400).json({ success: false, error: "URL is required" });
+    const urlErr = validateUrl(url);
+    if (urlErr) return res.status(400).json({ success: false, error: urlErr });
+
+    const pageContent = await fetchPageContent(url);
+    const text = await callClaude(`You are a Facebook Ads targeting expert. Analyze this landing page and recommend the best audience targeting.
+
+LANDING PAGE: ${pageContent}
+URL: ${url}
+OBJECTIVE: ${objective || "sales"}
+TARGET COUNTRY: ${country || "India"}
+
+Provide detailed targeting recommendations. Think about:
+- Who would buy this product?
+- What are their interests?
+- Age range and gender
+- What Facebook interest categories match?
+
+IMPORTANT: For interests, use REAL Facebook interest targeting names that exist in Facebook Ads Manager (e.g. "Online shopping", "Beauty", "Fitness and wellness", "Fashion accessories", etc.)
+
+Respond ONLY with this JSON, no other text:
+{
+  "age_min": 18,
+  "age_max": 45,
+  "gender": "all",
+  "gender_reason": "why this gender",
+  "interests": [
+    {"name": "Interest Name 1", "reason": "why this interest"},
+    {"name": "Interest Name 2", "reason": "why this interest"},
+    {"name": "Interest Name 3", "reason": "why this interest"},
+    {"name": "Interest Name 4", "reason": "why this interest"},
+    {"name": "Interest Name 5", "reason": "why this interest"},
+    {"name": "Interest Name 6", "reason": "why this interest"},
+    {"name": "Interest Name 7", "reason": "why this interest"},
+    {"name": "Interest Name 8", "reason": "why this interest"}
+  ],
+  "audience_strategy": "2-3 sentence explanation of the targeting strategy",
+  "suggested_ad_sets": [
+    {"name": "Ad Set Name 1", "description": "who this targets", "interests": ["Interest 1", "Interest 2", "Interest 3"]},
+    {"name": "Ad Set Name 2", "description": "who this targets", "interests": ["Interest 4", "Interest 5", "Interest 6"]},
+    {"name": "Ad Set Name 3", "description": "broad/lookalike approach", "interests": []}
+  ]
+}`);
+
+    const clean = text.replace(/```json|```/g, "").trim();
+    const suggestion = JSON.parse(clean);
+    res.json({ success: true, suggestion });
+  } catch (error) {
+    logger.error("AI audience suggestion failed", { error: error.message });
+    if (error.response?.status === 401) return res.status(401).json({ success: false, error: "Invalid ANTHROPIC_API_KEY" });
+    res.status(500).json({ success: false, error: error.message || "AI generation failed" });
+  }
+});
+
 /**
  * POST /api/campaigns/generate-copy — AI Ad Copy Generator
  */
@@ -262,61 +398,15 @@ router.post("/generate-copy", async (req, res) => {
   try {
     const { url, objective } = req.body;
     if (!url) return res.status(400).json({ success: false, error: "URL is required" });
+    const urlErr = validateUrl(url);
+    if (urlErr) return res.status(400).json({ success: false, error: urlErr });
 
-    // Validate URL format
-    try {
-      const parsed = new URL(url);
-      if (!["http:", "https:"].includes(parsed.protocol)) {
-        return res.status(400).json({ success: false, error: "URL must start with http:// or https://" });
-      }
-      // Block internal/private IPs
-      const hostname = parsed.hostname;
-      if (hostname === "localhost" || hostname.startsWith("127.") || hostname.startsWith("10.") ||
-          hostname.startsWith("172.") || hostname.startsWith("192.168.") || hostname === "169.254.169.254") {
-        return res.status(400).json({ success: false, error: "Internal URLs are not allowed" });
-      }
-    } catch (_) {
-      return res.status(400).json({ success: false, error: "Invalid URL format" });
-    }
+    const pageContent = await fetchPageContent(url);
+    const text = await callClaude(`You are an expert Facebook Ads copywriter. Analyze this landing page and write 3 ad copy variations.
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return res.status(400).json({ success: false, error: "ANTHROPIC_API_KEY not configured. Add it to your environment variables." });
-    }
-
-    // Fetch landing page content
-    let pageContent = "";
-    try {
-      const response = await axios.get(url, {
-        timeout: 10000,
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; BulkAdsPro/3.0)" },
-        maxRedirects: 3,
-      });
-      pageContent = response.data
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .substring(0, 3000);
-    } catch (e) {
-      pageContent = `Landing page URL: ${url} (could not fetch content)`;
-      logger.warn("Could not fetch landing page", { url, error: e.message });
-    }
-
-    // Call Claude API
-    const claudeResponse = await axios.post("https://api.anthropic.com/v1/messages", {
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      messages: [{
-        role: "user",
-        content: `You are an expert Facebook Ads copywriter. Analyze this landing page and write 3 ad copy variations.
-
-LANDING PAGE CONTENT:
-${pageContent}
-
+LANDING PAGE: ${pageContent}
 URL: ${url}
-CAMPAIGN OBJECTIVE: ${objective || "sales"}
+OBJECTIVE: ${objective || "sales"}
 
 RULES:
 - Use emojis (2-4 per text)
@@ -327,39 +417,20 @@ RULES:
 - Descriptions under 60 characters
 - Focus on benefits, not features
 
-Respond ONLY with this JSON format, no other text:
+Respond ONLY with this JSON, no other text:
 [
   {"primaryText": "...", "headline": "...", "description": "..."},
   {"primaryText": "...", "headline": "...", "description": "..."},
   {"primaryText": "...", "headline": "...", "description": "..."}
-]`
-      }],
-    }, {
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      timeout: 30000,
-    });
+]`);
 
-    const text = claudeResponse.data.content[0]?.text || "[]";
-    let variations;
-    try {
-      const clean = text.replace(/```json|```/g, "").trim();
-      variations = JSON.parse(clean);
-    } catch (e) {
-      logger.error("Failed to parse AI response");
-      return res.status(502).json({ success: false, error: "AI returned invalid format" });
-    }
-
+    const clean = text.replace(/```json|```/g, "").trim();
+    const variations = JSON.parse(clean);
     res.json({ success: true, variations });
   } catch (error) {
     logger.error("AI copy generation failed", { error: error.message });
-    if (error.response?.status === 401) {
-      return res.status(401).json({ success: false, error: "Invalid ANTHROPIC_API_KEY" });
-    }
-    res.status(500).json({ success: false, error: "AI generation failed" });
+    if (error.response?.status === 401) return res.status(401).json({ success: false, error: "Invalid ANTHROPIC_API_KEY" });
+    res.status(500).json({ success: false, error: error.message || "AI generation failed" });
   }
 });
 

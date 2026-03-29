@@ -371,6 +371,10 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiUrl, setAiUrl] = useState("");
   const [aiVariations, setAiVariations] = useState([]);
+  const [aiNameLoading, setAiNameLoading] = useState(false);
+  const [aiNames, setAiNames] = useState([]);
+  const [aiAudienceLoading, setAiAudienceLoading] = useState(false);
+  const [aiAudience, setAiAudience] = useState(null);
   const [adSets, setAdSets] = useState([{ id: 1, name: "Broad", audienceType: "broad", ageMin: 18, ageMax: 65, gender: "all", interests: [], budget: "50" }]);
   const [activeAdSet, setActiveAdSet] = useState(1);
   const [selAccounts, setSelAccounts] = useState([]);
@@ -558,6 +562,28 @@ export default function App() {
     } catch (e) { flash(e.message, "error"); }
     setAiLoading(false);
   }, [aiUrl, cObj, flash]);
+
+  const generateAiName = useCallback(async (url) => {
+    if (!url) { flash("Enter a product URL in ad copy step first", "error"); return; }
+    setAiNameLoading(true); setAiNames([]);
+    try {
+      const r = await api.post("/api/campaigns/generate-name", { url, objective: cObj || "sales" });
+      if (r.success && r.names) { setAiNames(r.names); flash("AI generated " + r.names.length + " name suggestions!"); }
+      else { flash(r.error || "Name generation failed", "error"); }
+    } catch (e) { flash(e.message, "error"); }
+    setAiNameLoading(false);
+  }, [cObj, flash]);
+
+  const suggestAudience = useCallback(async (url) => {
+    if (!url) { flash("Enter a product URL first", "error"); return; }
+    setAiAudienceLoading(true); setAiAudience(null);
+    try {
+      const r = await api.post("/api/campaigns/suggest-audience", { url, objective: cObj || "sales", country: cCountries[0] || "IN" });
+      if (r.success && r.suggestion) { setAiAudience(r.suggestion); flash("AI audience suggestion ready!"); }
+      else { flash(r.error || "Audience suggestion failed", "error"); }
+    } catch (e) { flash(e.message, "error"); }
+    setAiAudienceLoading(false);
+  }, [cObj, cCountries, flash]);
 
   /* ══════════════════════════════════════
      EXCLUDE LOCATION SEARCH
@@ -942,7 +968,22 @@ export default function App() {
           <div style={S.cardT}>Campaign Setup</div>
           <div style={S.cardD}>Name, objective, budget, page, and optional location targeting</div>
 
-          <div style={{ marginBottom: 16 }}><label style={S.lbl}>Campaign Name</label><input style={S.inp} value={cName} onChange={e => setCName(e.target.value)} placeholder="e.g. Summer Sale 2026" /></div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <label style={{ ...S.lbl, marginBottom: 0 }}>Campaign Name</label>
+              <Btn variant="ghost" onClick={() => generateAiName(adCopy.url || aiUrl)} disabled={aiNameLoading} style={{ padding: "3px 10px", fontSize: 10 }}>
+                {aiNameLoading ? "Generating..." : "AI Name"}
+              </Btn>
+            </div>
+            <input style={S.inp} value={cName} onChange={e => setCName(e.target.value)} placeholder="e.g. Summer Sale 2026 — or click AI Name" />
+            {aiNames.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 6 }}>
+                {aiNames.map((n, i) => (
+                  <Chip key={i} selected={cName === n.name} onClick={() => setCName(n.name)}>{n.name}</Chip>
+                ))}
+              </div>
+            )}
+          </div>
 
           <label style={S.lbl}>Objective</label>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(130px,1fr))", gap: 7, marginBottom: 16 }}>
@@ -1289,6 +1330,85 @@ export default function App() {
             <Btn variant="ghost" onClick={addAdSet}><Ic t="plus" sz={12} /> Add Ad Set</Btn>
           </div>
           <div style={S.cardD}>Each ad set gets its own targeting. All creatives go into every set.</div>
+
+          {/* AI Audience Suggestion */}
+          <div style={{ padding: 14, background: "linear-gradient(135deg,rgba(168,85,247,.06),rgba(99,102,241,.06))", borderRadius: 12, border: "1px solid rgba(168,85,247,.12)", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ac2 }}>AI Audience Suggestion</div>
+              <Badge color={T.ac2}>AI</Badge>
+            </div>
+            <div style={{ fontSize: 12, color: T.txM, marginBottom: 10 }}>Paste your product URL — AI recommends the best targeting (interests, age, gender)</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input style={{ ...S.inp, flex: 1 }} value={aiUrl} onChange={e => setAiUrl(e.target.value)} placeholder="https://yoursite.com/product" />
+              <Btn onClick={() => suggestAudience(aiUrl)} disabled={aiAudienceLoading} style={{ whiteSpace: "nowrap" }}>
+                {aiAudienceLoading ? "Analyzing..." : "Suggest Audience"}
+              </Btn>
+            </div>
+
+            {aiAudience && (
+              <div style={{ marginTop: 12 }}>
+                {/* Strategy */}
+                <div style={{ padding: 10, background: "rgba(99,102,241,.06)", borderRadius: 8, border: "1px solid rgba(99,102,241,.1)", marginBottom: 10, fontSize: 12, color: T.txM, lineHeight: 1.6 }}>
+                  <b style={{ color: T.ac }}>Strategy:</b> {aiAudience.audience_strategy}
+                </div>
+
+                {/* Age + Gender */}
+                <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                  <div style={{ flex: 1, padding: 10, background: "rgba(255,255,255,.02)", borderRadius: 8, border: `1px solid ${T.bd}` }}>
+                    <div style={{ fontSize: 10, color: T.txD, fontWeight: 600, textTransform: "uppercase", marginBottom: 3 }}>Age Range</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: T.ac }}>{aiAudience.age_min} — {aiAudience.age_max}</div>
+                  </div>
+                  <div style={{ flex: 1, padding: 10, background: "rgba(255,255,255,.02)", borderRadius: 8, border: `1px solid ${T.bd}` }}>
+                    <div style={{ fontSize: 10, color: T.txD, fontWeight: 600, textTransform: "uppercase", marginBottom: 3 }}>Gender</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: T.ac2 }}>{aiAudience.gender === "all" ? "All" : aiAudience.gender}</div>
+                    <div style={{ fontSize: 10, color: T.txD }}>{aiAudience.gender_reason}</div>
+                  </div>
+                </div>
+
+                {/* Interests */}
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: T.txM, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px" }}>Suggested Interests</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {aiAudience.interests.map((int, i) => (
+                      <span key={i} title={int.reason} style={{ padding: "5px 10px", borderRadius: 18, fontSize: 11, fontWeight: 600, background: "rgba(99,102,241,.08)", color: "#818cf8", border: "1px solid rgba(99,102,241,.2)", cursor: "help" }}>
+                        {int.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Suggested Ad Sets — one-click apply */}
+                {aiAudience.suggested_ad_sets && (
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: T.txM, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px" }}>Suggested Ad Set Structure</div>
+                    {aiAudience.suggested_ad_sets.map((s, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 8, background: "rgba(255,255,255,.02)", border: `1px solid ${T.bd}`, marginBottom: 4, fontSize: 12 }}>
+                        <Badge color={T.ac2}>{i + 1}</Badge>
+                        <div style={{ flex: 1 }}><b>{s.name}</b> — <span style={{ color: T.txM }}>{s.description}</span></div>
+                      </div>
+                    ))}
+                    <Btn variant="ghost" onClick={() => {
+                      const newSets = aiAudience.suggested_ad_sets.map((s, i) => ({
+                        id: i + 1,
+                        name: s.name,
+                        audienceType: s.interests.length > 0 ? "detailed" : "broad",
+                        ageMin: aiAudience.age_min,
+                        ageMax: aiAudience.age_max,
+                        gender: aiAudience.gender || "all",
+                        interests: s.interests.map(name => ({ id: name, name })),
+                        budget: cBudget,
+                      }));
+                      setAdSets(newSets);
+                      setActiveAdSet(1);
+                      flash("Applied AI audience structure!");
+                    }} style={{ marginTop: 6, fontSize: 11 }}>
+                      <Ic t="zap" sz={12} /> Apply AI Suggestion
+                    </Btn>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Budget Mode */}
           <div style={{ ...S.row, marginBottom: 16 }}>
