@@ -316,13 +316,6 @@ export default function App() {
   const [wsResults, setWsResults] = useState([]);
   const wsRef = useRef(null);
 
-  /* ── Analytics ── */
-  const [analyticsData, setAnalyticsData] = useState([]);
-  const [dailyData, setDailyData] = useState([]);
-  const [analyticsLoading, setAnalyticsLoading] = useState(false);
-  const [analyticsPreset, setAnalyticsPreset] = useState("last_7d");
-  const [activeSpend, setActiveSpend] = useState({ accounts: [], total: 0 });
-
   /* ── Groups ── */
   const [newGrpName, setNewGrpName] = useState("");
   const [showNewGrp, setShowNewGrp] = useState(false);
@@ -496,45 +489,20 @@ export default function App() {
   /* ══════════════════════════════════════
      EXCLUDE LOCATION SEARCH
      ══════════════════════════════════════ */
-  const searchExcludeLocations = useCallback((q) => {
+  const [excludeType, setExcludeType] = useState("region");
+
+  const searchExcludeLocations = useCallback((q, type) => {
     if (excludeDebounce.current) clearTimeout(excludeDebounce.current);
     if (q.length < 2) { setExcludeResults([]); return; }
     excludeDebounce.current = setTimeout(async () => {
       try {
-        const r = await api.get(`/api/accounts/geo-search?q=${encodeURIComponent(q)}&type=region`);
+        const searchType = type || excludeType;
+        const types = searchType === "all" ? "region,city" : searchType;
+        const r = await api.get(`/api/accounts/geo-search?q=${encodeURIComponent(q)}&types=${types}`);
         if (r.success) setExcludeResults(r.locations);
       } catch (_) {}
-    }, 350);
-  }, []);
-
-  /* ══════════════════════════════════════
-     ANALYTICS
-     ══════════════════════════════════════ */
-  const fetchAnalytics = useCallback(async (preset) => {
-    if (accounts.length === 0) return;
-    setAnalyticsLoading(true);
-    const activeIds = accounts.filter(a => a.status === "active").slice(0, 5).map(a => a.account_id || a.id.replace("act_", ""));
-    if (activeIds.length === 0) { setAnalyticsLoading(false); return; }
-    try {
-      const [overview, daily] = await Promise.all([
-        api.get(`/api/analytics/overview?account_ids=${activeIds.join(",")}&date_preset=${preset || analyticsPreset}`),
-        api.get(`/api/analytics/daily?account_ids=${activeIds.join(",")}&date_preset=${preset || analyticsPreset}`),
-      ]);
-      if (overview.success) setAnalyticsData(overview.results);
-      if (daily.success) setDailyData(daily.daily);
-    } catch (_) {}
-    setAnalyticsLoading(false);
-  }, [accounts, analyticsPreset]);
-
-  const fetchActiveSpend = useCallback(async () => {
-    if (accounts.length === 0) return;
-    const activeIds = accounts.filter(a => a.status === "active").slice(0, 20).map(a => a.account_id || a.id.replace("act_", ""));
-    if (activeIds.length === 0) return;
-    try {
-      const r = await api.get(`/api/analytics/active-spend?account_ids=${activeIds.join(",")}`);
-      if (r.success) setActiveSpend({ accounts: r.accounts, total: r.total_spend_today });
-    } catch (_) {}
-  }, [accounts]);
+    }, 300);
+  }, [excludeType]);
 
   /* ══════════════════════════════════════
      CAMPAIGN BUILDER LOGIC
@@ -638,9 +606,14 @@ export default function App() {
       // Location — REQUIRED by Facebook. Always send at least one country.
       targeting.geo_locations = { countries: cCountries.length > 0 ? cCountries : ["IN"] };
 
-      // Excluded locations
+      // Excluded locations — group by type (regions vs cities)
       if (cExcludedRegions.length > 0) {
-        targeting.excluded_geo_locations = { regions: cExcludedRegions.map(r => ({ key: r.key })) };
+        const excl = {};
+        const regions = cExcludedRegions.filter(r => r.type === "region");
+        const cities = cExcludedRegions.filter(r => r.type === "city");
+        if (regions.length > 0) excl.regions = regions.map(r => ({ key: r.key }));
+        if (cities.length > 0) excl.cities = cities.map(r => ({ key: r.key }));
+        if (Object.keys(excl).length > 0) targeting.excluded_geo_locations = excl;
       }
 
       if (as.audienceType !== "broad") {
@@ -744,11 +717,10 @@ export default function App() {
     { id: "campaigns", icon: "list", label: "Campaigns" },
     { id: "templates", icon: "grid", label: "Templates" },
     { id: "accounts", icon: "users", label: "Ad Accounts" },
-    { id: "analytics", icon: "chart", label: "Analytics" },
     { id: "settings", icon: "gear", label: "Settings" },
   ];
 
-  const titles = { dashboard: "Dashboard", create: "Create Campaign", campaigns: "All Campaigns", templates: "Templates", accounts: "Ad Accounts", analytics: "Analytics", settings: "API Settings" };
+  const titles = { dashboard: "Dashboard", create: "Create Campaign", campaigns: "All Campaigns", templates: "Templates", accounts: "Ad Accounts", settings: "API Settings" };
 
   /* ══════════════════════════════════════
      RENDER: DASHBOARD
@@ -786,7 +758,7 @@ export default function App() {
           { icon: "plus", t: "New Campaign", d: "Build from scratch", act: () => { resetCampaign(); setPg("create"); } },
           { icon: "grid", t: "Templates", d: `${templates.length} ready to use`, act: () => setPg("templates") },
           { icon: "gear", t: apiConnected ? "API Connected" : "Connect API", d: apiConnected ? `${accounts.length} accounts` : "Add your token", act: () => setPg("settings") },
-          { icon: "chart", t: "Analytics", d: "View performance", act: () => setPg("analytics") },
+          { icon: "list", t: "Campaigns", d: "View history", act: () => setPg("campaigns") },
         ].map((q, i) => (
           <div key={i} className="hg" style={{ ...S.card, marginBottom: 0, cursor: "pointer", animation: `fi .3s ease ${i * .06}s both` }} onClick={q.act}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -962,42 +934,76 @@ export default function App() {
             )}
           </div>
 
-          {/* Exclude Locations */}
+          {/* Exclude Locations — Powerful Search */}
           <div style={{ borderTop: `1px solid ${T.bd}`, paddingTop: 16, marginTop: 16 }}>
             <label style={S.lbl}>Exclude Locations (Optional)</label>
-            <div style={{ fontSize: 11.5, color: T.txM, marginBottom: 8 }}>Exclude specific regions/states from targeting (e.g. high-RTO areas)</div>
-            <input style={S.inp} value={excludeSearch} onChange={e => { setExcludeSearch(e.target.value); searchExcludeLocations(e.target.value); }} placeholder="Search regions to exclude (e.g. Jammu, Kashmir, Northeast)..." />
+            <div style={{ fontSize: 11.5, color: T.txM, marginBottom: 10 }}>Exclude specific states, cities, or regions — great for removing high-RTO or low-converting areas</div>
+
+            {/* Search Type Tabs */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+              {[{ v: "region", l: "States/Regions" }, { v: "city", l: "Cities" }, { v: "all", l: "All Types" }].map(t => (
+                <Btn key={t.v} variant={excludeType === t.v ? "primary" : "ghost"} onClick={() => { setExcludeType(t.v); if (excludeSearch.length >= 2) searchExcludeLocations(excludeSearch, t.v); }} style={{ padding: "4px 10px", fontSize: 10.5 }}>{t.l}</Btn>
+              ))}
+            </div>
+
+            {/* Search Input */}
+            <div style={{ position: "relative" }}>
+              <div style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.txD }}><Ic t="search" sz={14} /></div>
+              <input style={{ ...S.inp, paddingLeft: 32 }} value={excludeSearch} onChange={e => { setExcludeSearch(e.target.value); searchExcludeLocations(e.target.value); }} placeholder={excludeType === "city" ? "Search cities (e.g. Mumbai, Delhi)..." : excludeType === "region" ? "Search states/regions (e.g. Jammu, Bihar)..." : "Search any location..."} />
+            </div>
+
+            {/* Search Results */}
             {excludeResults.length > 0 && (
-              <div style={{ marginTop: 6, padding: 8, background: "rgba(255,255,255,.02)", borderRadius: 8, border: `1px solid ${T.bd}`, maxHeight: 160, overflowY: "auto" }}>
-                {excludeResults.map(l => (
-                  <div key={l.key} className="hr" style={{ padding: "7px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12, display: "flex", justifyContent: "space-between" }}
-                    onClick={() => {
-                      if (!cExcludedRegions.some(r => r.key === l.key)) {
+              <div style={{ marginTop: 6, padding: 6, background: "rgba(255,255,255,.02)", borderRadius: 8, border: `1px solid ${T.bd}`, maxHeight: 200, overflowY: "auto" }}>
+                {excludeResults.map(l => {
+                  const already = cExcludedRegions.some(r => r.key === l.key && r.type === l.type);
+                  return (
+                    <div key={`${l.type}_${l.key}`} className="hr" style={{ padding: "8px 10px", borderRadius: 6, cursor: already ? "default" : "pointer", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center", opacity: already ? 0.4 : 1 }}
+                      onClick={() => {
+                        if (already) return;
                         setCExcludedRegions(p => [...p, l]);
-                      }
-                      setExcludeResults([]); setExcludeSearch("");
-                    }}>
-                    <span>{l.name}</span>
-                    <span style={{ fontSize: 10, color: T.txD }}>{l.country_name} ({l.type})</span>
-                  </div>
-                ))}
+                      }}>
+                      <div>
+                        <span style={{ fontWeight: 600 }}>{l.name}</span>
+                        {l.region && <span style={{ color: T.txD, marginLeft: 4 }}>({l.region})</span>}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <Badge color={l.type === "city" ? T.ac2 : l.type === "region" ? T.ac : T.warn}>{l.type}</Badge>
+                        <span style={{ fontSize: 10, color: T.txD }}>{l.country_name}</span>
+                        {already ? <span style={{ fontSize: 10, color: T.ok }}>Added</span> : <span style={{ fontSize: 10, color: T.ac }}>+ Add</span>}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
+
+            {/* Selected Exclusions */}
             {cExcludedRegions.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
-                {cExcludedRegions.map(r => (
-                  <Chip key={r.key} selected onClick={() => setCExcludedRegions(p => p.filter(x => x.key !== r.key))}>
-                    {r.name} ({r.country_code}) x
-                  </Chip>
-                ))}
-                <span style={{ cursor: "pointer", fontSize: 11, color: T.err, padding: "5px 8px" }} onClick={() => setCExcludedRegions([])}>Clear all</span>
+              <div style={{ marginTop: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: T.err }}>Excluded ({cExcludedRegions.length})</span>
+                  <span style={{ cursor: "pointer", fontSize: 11, color: T.err }} onClick={() => setCExcludedRegions([])}>Clear all</span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                  {cExcludedRegions.map(r => (
+                    <span key={`${r.type}_${r.key}`} onClick={() => setCExcludedRegions(p => p.filter(x => !(x.key === r.key && x.type === r.type)))} style={{
+                      display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 18, fontSize: 11, fontWeight: 600,
+                      cursor: "pointer", background: "rgba(239,68,68,.08)", color: T.err, border: "1px solid rgba(239,68,68,.2)",
+                    }}>
+                      {r.name} <span style={{ fontSize: 9, opacity: 0.6 }}>({r.type})</span> ×
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
-            {/* Quick presets for India */}
-            {cCountries.includes("IN") && cExcludedRegions.length === 0 && (
-              <div style={{ marginTop: 8 }}>
-                <Btn variant="ghost" style={{ fontSize: 11, padding: "5px 10px" }} onClick={() => {
-                  setCExcludedRegions([
+
+            {/* Quick Presets */}
+            {cCountries.includes("IN") && (
+              <div style={{ marginTop: 10, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 10, color: T.txD, padding: "5px 0", fontWeight: 600 }}>Quick:</span>
+                <Btn variant="ghost" style={{ fontSize: 10, padding: "4px 8px" }} onClick={() => {
+                  const regions = [
                     { key: "1732", name: "Jammu and Kashmir", country_code: "IN", type: "region" },
                     { key: "1738", name: "Manipur", country_code: "IN", type: "region" },
                     { key: "1739", name: "Meghalaya", country_code: "IN", type: "region" },
@@ -1005,11 +1011,33 @@ export default function App() {
                     { key: "1741", name: "Nagaland", country_code: "IN", type: "region" },
                     { key: "1746", name: "Tripura", country_code: "IN", type: "region" },
                     { key: "1722", name: "Arunachal Pradesh", country_code: "IN", type: "region" },
-                  ]);
-                  flash("Excluded high-RTO regions (J&K + Northeast)");
-                }}>
-                  Exclude High-RTO India Regions (J&K + Northeast)
-                </Btn>
+                  ];
+                  setCExcludedRegions(p => { const existing = new Set(p.map(r => r.key)); return [...p, ...regions.filter(r => !existing.has(r.key))]; });
+                  flash("Added J&K + Northeast exclusions");
+                }}>J&K + Northeast</Btn>
+                <Btn variant="ghost" style={{ fontSize: 10, padding: "4px 8px" }} onClick={() => {
+                  const regions = [
+                    { key: "1732", name: "Jammu and Kashmir", country_code: "IN", type: "region" },
+                    { key: "1724", name: "Bihar", country_code: "IN", type: "region" },
+                    { key: "1731", name: "Jharkhand", country_code: "IN", type: "region" },
+                    { key: "1749", name: "Uttar Pradesh", country_code: "IN", type: "region" },
+                    { key: "1738", name: "Manipur", country_code: "IN", type: "region" },
+                    { key: "1739", name: "Meghalaya", country_code: "IN", type: "region" },
+                    { key: "1740", name: "Mizoram", country_code: "IN", type: "region" },
+                    { key: "1741", name: "Nagaland", country_code: "IN", type: "region" },
+                    { key: "1746", name: "Tripura", country_code: "IN", type: "region" },
+                    { key: "1722", name: "Arunachal Pradesh", country_code: "IN", type: "region" },
+                  ];
+                  setCExcludedRegions(p => { const existing = new Set(p.map(r => r.key)); return [...p, ...regions.filter(r => !existing.has(r.key))]; });
+                  flash("Added high-RTO state exclusions");
+                }}>High RTO States</Btn>
+                <Btn variant="ghost" style={{ fontSize: 10, padding: "4px 8px" }} onClick={() => {
+                  const regions = [
+                    { key: "1732", name: "Jammu and Kashmir", country_code: "IN", type: "region" },
+                  ];
+                  setCExcludedRegions(p => { const existing = new Set(p.map(r => r.key)); return [...p, ...regions.filter(r => !existing.has(r.key))]; });
+                  flash("Added J&K exclusion");
+                }}>J&K Only</Btn>
               </div>
             )}
           </div>
@@ -1575,131 +1603,6 @@ export default function App() {
     </div>
   );
 
-  const renderAnalytics = () => {
-    // Aggregate analytics data
-    const totals = analyticsData.reduce((acc, r) => {
-      if (r.data && r.data[0]) {
-        const d = r.data[0];
-        acc.spend += parseFloat(d.spend || 0);
-        acc.impressions += parseInt(d.impressions || 0);
-        acc.clicks += parseInt(d.clicks || 0);
-        acc.reach += parseInt(d.reach || 0);
-        if (d.actions) {
-          const purchases = d.actions.find(a => a.action_type === "purchase" || a.action_type === "omni_purchase");
-          if (purchases) acc.purchases += parseInt(purchases.value || 0);
-        }
-      }
-      return acc;
-    }, { spend: 0, impressions: 0, clicks: 0, reach: 0, purchases: 0 });
-
-    const ctr = totals.impressions > 0 ? ((totals.clicks / totals.impressions) * 100).toFixed(2) : "0.00";
-    const cpc = totals.clicks > 0 ? (totals.spend / totals.clicks).toFixed(2) : "0.00";
-    const cpa = totals.purchases > 0 ? (totals.spend / totals.purchases).toFixed(2) : "—";
-
-    return (
-      <div style={S.ct}>
-        {!apiConnected ? (
-          <div style={{ ...S.card, textAlign: "center", padding: 40 }}>
-            <div style={{ fontSize: 48, marginBottom: 10 }}><Ic t="chart" sz={48} /></div>
-            <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 5 }}>Connect Facebook API</div>
-            <div style={{ fontSize: 13, color: T.txM, marginBottom: 16 }}>Connect your API to view live analytics</div>
-            <Btn variant="fb" onClick={() => setPg("settings")}><Ic t="fb" sz={14} /> Connect</Btn>
-          </div>
-        ) : (
-          <>
-            {/* Date Filter + Refresh */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div style={{ display: "flex", gap: 5 }}>
-                {[{ v: "today", l: "Today" }, { v: "yesterday", l: "Yesterday" }, { v: "last_7d", l: "7 Days" }, { v: "last_14d", l: "14 Days" }, { v: "last_30d", l: "30 Days" }].map(p => (
-                  <Btn key={p.v} variant={analyticsPreset === p.v ? "primary" : "ghost"} onClick={() => { setAnalyticsPreset(p.v); fetchAnalytics(p.v); }} style={{ padding: "5px 12px", fontSize: 11 }}>{p.l}</Btn>
-                ))}
-              </div>
-              <Btn variant="ghost" onClick={() => { fetchAnalytics(); fetchActiveSpend(); }} disabled={analyticsLoading}>
-                <Ic t="refresh" sz={13} /> {analyticsLoading ? "Loading..." : "Refresh"}
-              </Btn>
-            </div>
-
-            {/* KPI Cards */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(145px,1fr))", gap: 10, marginBottom: 16 }}>
-              {[
-                { l: "Spend", v: `${totals.spend.toFixed(2)}`, c: T.ac },
-                { l: "Impressions", v: totals.impressions.toLocaleString(), c: T.ac2 },
-                { l: "Clicks", v: totals.clicks.toLocaleString(), c: T.ok },
-                { l: "CTR", v: `${ctr}%`, c: T.warn },
-                { l: "CPC", v: cpc, c: T.ac },
-                { l: "Purchases", v: totals.purchases, c: T.ok },
-                { l: "CPA", v: cpa, c: T.err },
-                { l: "Reach", v: totals.reach.toLocaleString(), c: T.ac2 },
-              ].map((k, i) => (
-                <div key={i} style={{ ...S.card, padding: 14, marginBottom: 0 }}>
-                  <div style={{ fontSize: 10, color: T.txM, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 4, fontWeight: 600 }}>{k.l}</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: k.c, letterSpacing: "-1px" }}>{k.v}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Daily Chart */}
-            {dailyData.length > 0 && (
-              <div style={S.card}>
-                <div style={S.cardT}>Daily Performance</div>
-                <div style={{ height: 250, marginTop: 12 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={dailyData}>
-                      <defs>
-                        <linearGradient id="gSpend" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={T.ac} stopOpacity={0.3} />
-                          <stop offset="95%" stopColor={T.ac} stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <XAxis dataKey="date" stroke={T.txD} fontSize={10} tickFormatter={d => d.slice(5)} />
-                      <YAxis stroke={T.txD} fontSize={10} />
-                      <Tooltip contentStyle={{ background: T.sf, border: `1px solid ${T.bd}`, borderRadius: 8, fontSize: 12 }} />
-                      <Area type="monotone" dataKey="spend" stroke={T.ac} fill="url(#gSpend)" strokeWidth={2} name="Spend" />
-                      <Area type="monotone" dataKey="clicks" stroke={T.ok} fill="none" strokeWidth={1.5} name="Clicks" />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            )}
-
-            {/* Budget Calculator — Active Campaign Spend */}
-            <div style={S.card}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                <div style={S.cardT}>Budget Calculator — Today's Active Spend</div>
-                <Btn variant="ghost" onClick={fetchActiveSpend} style={{ padding: "5px 10px", fontSize: 11 }}><Ic t="refresh" sz={11} /> Refresh</Btn>
-              </div>
-              <div style={S.cardD}>Real-time spend across active accounts</div>
-              {activeSpend.accounts.length > 0 ? (
-                <>
-                  {activeSpend.accounts.map((a, i) => (
-                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 12px", borderRadius: 6, fontSize: 12.5, background: i % 2 === 0 ? "rgba(255,255,255,.015)" : "transparent" }}>
-                      <span>{a.name || a.account_id}</span>
-                      <span style={{ fontFamily: MONO, fontWeight: 600, color: a.spend_today > 0 ? T.ok : T.txD }}>
-                        {a.currency} {a.spend_today.toFixed(2)}
-                      </span>
-                    </div>
-                  ))}
-                  <div style={{ marginTop: 10, padding: 12, background: T.gradS, borderRadius: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontWeight: 700 }}>Total Spend Today</span>
-                    <span style={{ fontSize: 18, fontWeight: 800, color: T.ac, fontFamily: MONO }}>{activeSpend.total.toFixed(2)}</span>
-                  </div>
-                </>
-              ) : (
-                <div style={{ textAlign: "center", padding: 20, color: T.txD }}>Click Refresh to load today's spend data</div>
-              )}
-            </div>
-
-            {analyticsData.length === 0 && !analyticsLoading && (
-              <div style={{ textAlign: "center", padding: 24, color: T.txD }}>
-                Click a date range above to load analytics data from Facebook Insights.
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    );
-  };
-
   /* ══════════════════════════════════════
      RENDER: TEMPLATE EDITOR MODAL
      ══════════════════════════════════════ */
@@ -1736,7 +1639,7 @@ export default function App() {
   /* ══════════════════════════════════════
      MAIN RENDER
      ══════════════════════════════════════ */
-  const pages = { dashboard: renderDashboard, create: renderCreate, campaigns: renderCampaigns, templates: renderTemplates, accounts: renderAccounts, analytics: renderAnalytics, settings: renderSettings };
+  const pages = { dashboard: renderDashboard, create: renderCreate, campaigns: renderCampaigns, templates: renderTemplates, accounts: renderAccounts, settings: renderSettings };
 
   return (
     <div style={S.layout}>

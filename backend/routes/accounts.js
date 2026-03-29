@@ -71,31 +71,51 @@ router.get("/:id", async (req, res) => {
 });
 
 /**
- * GET /api/accounts/geo-search?q={query}&type={region|city}
- * Search Facebook's adgeolocation database for regions/cities to include or exclude
+ * GET /api/accounts/geo-search?q={query}&types=region,city,zip,geo_market
+ * Search Facebook's adgeolocation database — supports multiple location types
  */
 router.get("/geo-search", async (req, res) => {
   try {
-    const { q, type } = req.query;
+    const { q, types } = req.query;
     if (!q || q.length < 2) {
       return res.json({ success: true, locations: [] });
     }
-    const locationType = type || "region";
-    const result = await facebookService.graphRequest("GET", "/search", {
-      type: "adgeolocation",
-      q: q,
-      location_types: locationType,
-    }, req.fbToken);
-    res.json({
-      success: true,
-      locations: (result.data || []).map(l => ({
-        key: l.key,
-        name: l.name,
-        type: l.type,
-        country_code: l.country_code,
-        country_name: l.country_name,
-      })),
-    });
+
+    // Search multiple types in parallel for richer results
+    const searchTypes = types ? types.split(",") : ["region", "city"];
+    const searches = await Promise.allSettled(
+      searchTypes.map(t =>
+        facebookService.graphRequest("GET", "/search", {
+          type: "adgeolocation",
+          q: q,
+          location_types: t,
+          limit: 15,
+        }, req.fbToken).then(r => (r.data || []).map(l => ({
+          key: l.key,
+          name: l.name,
+          type: l.type,
+          country_code: l.country_code,
+          country_name: l.country_name,
+          region: l.region || "",
+          supports_region: l.supports_region,
+          supports_city: l.supports_city,
+        })))
+      )
+    );
+
+    // Merge and deduplicate
+    const all = [];
+    const seen = new Set();
+    for (const r of searches) {
+      if (r.status === "fulfilled") {
+        for (const loc of r.value) {
+          const uid = `${loc.type}_${loc.key}`;
+          if (!seen.has(uid)) { seen.add(uid); all.push(loc); }
+        }
+      }
+    }
+
+    res.json({ success: true, locations: all });
   } catch (error) {
     res.status(500).json({ success: false, error: "Location search failed" });
   }
