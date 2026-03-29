@@ -1857,7 +1857,7 @@ export default function App() {
           <div style={{ textAlign: "center", marginBottom: 32 }}>
             <div style={{ width: 52, height: 52, borderRadius: 12, background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 900, color: "#fff", margin: "0 auto 14px" }}>B</div>
             <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.5px" }}>BulkAds<span style={{ color: T.ac }}> Pro</span></div>
-            <div style={{ fontSize: 11, color: T.txD, marginTop: 2, letterSpacing: ".5px" }}>by Adsmit Solutions</div>
+            <div style={{ fontSize: 12, color: T.ac2, marginTop: 4, letterSpacing: ".6px", fontWeight: 700 }}>by Adsmit Solutions</div>
           </div>
 
           {/* Auth Card */}
@@ -1925,7 +1925,7 @@ export default function App() {
       <div style={{ width: sbOpen ? 232 : 60, background: T.sf, borderRight: `1px solid ${T.bd}`, display: "flex", flexDirection: "column", transition: "width .25s", flexShrink: 0, zIndex: 10 }}>
         <div style={{ padding: sbOpen ? "18px 16px" : "18px 10px", display: "flex", alignItems: "center", gap: 11, borderBottom: `1px solid ${T.bd}`, minHeight: 60 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 900, color: "#fff", flexShrink: 0 }}>B</div>
-          {sbOpen && <div><div style={{ fontWeight: 800, fontSize: 14, letterSpacing: "-.5px" }}>BulkAds<span style={{ color: T.ac }}> Pro</span></div><div style={{ fontSize: 8.5, color: T.txD, letterSpacing: ".3px", marginTop: -1 }}>by Adsmit Solutions</div></div>}
+          {sbOpen && <div><div style={{ fontWeight: 800, fontSize: 14, letterSpacing: "-.5px" }}>BulkAds<span style={{ color: T.ac }}> Pro</span></div><div style={{ fontSize: 9.5, color: T.ac2, letterSpacing: ".5px", marginTop: 1, fontWeight: 700 }}>by Adsmit Solutions</div></div>}
         </div>
         <div style={{ flex: 1, padding: "10px 6px", display: "flex", flexDirection: "column", gap: 2 }}>
           {navItems.map(n => (
