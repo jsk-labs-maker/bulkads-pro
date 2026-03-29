@@ -29,19 +29,11 @@ if (process.env.NODE_ENV === "production") {
 }
 
 app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-      fontSrc: ["'self'", "https://fonts.gstatic.com"],
-      imgSrc: ["'self'", "data:", "blob:", "https:"],
-      connectSrc: ["'self'", "ws:", "wss:"],
-    },
-  },
+  contentSecurityPolicy: false, // Disabled — SPA with inline Vite module scripts
+  crossOriginEmbedderPolicy: false,
 }));
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://localhost:5001")
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://localhost:5001,https://facebook.adsmit.in")
   .split(",").map(s => s.trim());
 
 app.use(cors({
