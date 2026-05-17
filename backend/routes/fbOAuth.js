@@ -63,12 +63,19 @@ router.get("/login", (req, res) => {
     redirect_uri: getRedirectUri(req),
     state,
     response_type: "code",
-    scope: SCOPES,
-    auth_type: "rerequest", // re-ask for any declined perms
   });
 
+  // Facebook Login for Business uses config_id (permissions live in the
+  // Login Configuration). Classic Facebook Login uses scope.
+  if (process.env.FB_CONFIG_ID) {
+    params.set("config_id", process.env.FB_CONFIG_ID);
+  } else {
+    params.set("scope", SCOPES);
+    params.set("auth_type", "rerequest");
+  }
+
   const url = `https://www.facebook.com/${API_VERSION}/dialog/oauth?${params.toString()}`;
-  logger.info("OAuth login initiated", { state: state.slice(0, 8) });
+  logger.info("OAuth login initiated", { state: state.slice(0, 8), mode: process.env.FB_CONFIG_ID ? "config_id" : "scope" });
   res.redirect(url);
 });
 
