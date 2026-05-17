@@ -270,21 +270,50 @@ class FacebookService {
   }
 
   async getAllAdAccounts(businessId, token = null) {
+    // No business → use the user-level endpoint. Works for any account
+    // the user has a role on, with or without a Business Manager.
+    if (!businessId) return this.getMyAdAccounts(token);
+
     const [owned, client] = await Promise.allSettled([
       this.getOwnedAdAccounts(businessId, token),
       this.getClientAdAccounts(businessId, token),
     ]);
     const ownedAccounts = owned.status === "fulfilled" ? owned.value : [];
     const clientAccounts = client.status === "fulfilled" ? client.value : [];
-    const all = [...ownedAccounts, ...clientAccounts];
+    let all = [...ownedAccounts, ...clientAccounts];
 
-    // Deduplicate by id
+    // If the business yielded nothing, fall back to the user's accounts.
+    if (all.length === 0) {
+      try {
+        const mine = await this.getMyAdAccounts(token);
+        if (mine.length > 0) all = mine;
+      } catch (_) { /* keep empty */ }
+    }
+
     const seen = new Set();
     return all.filter(a => {
       if (seen.has(a.id)) return false;
       seen.add(a.id);
       return true;
     });
+  }
+
+  async getMyAdAccounts(token) {
+    const fields = "id,name,account_id,account_status,currency,timezone_name,timezone_offset_hours_utc,amount_spent,balance,business_name,spend_cap,disable_reason";
+    const accounts = [];
+    let url = `${this.baseUrl}/me/adaccounts?fields=${encodeURIComponent(fields)}&limit=100&access_token=${encodeURIComponent(token)}`;
+    while (url) {
+      try {
+        const r = await axios.get(url, { timeout: 30000 });
+        if (r.data?.data) accounts.push(...r.data.data);
+        url = r.data?.paging?.next || null;
+      } catch (e) {
+        logger.warn("getMyAdAccounts failed", { error: e.response?.data?.error?.message || e.message });
+        break;
+      }
+    }
+    logger.info(`Fetched ${accounts.length} ad accounts via /me/adaccounts`);
+    return accounts;
   }
 
   async getAdAccountDetails(accountId, token = null) {
@@ -317,11 +346,15 @@ class FacebookService {
   async getBusinessPages(businessId, token = null) {
     const allPages = [];
 
-    const sources = [
-      { endpoint: `/${businessId}/owned_pages`, label: "owned" },
-      { endpoint: `/${businessId}/client_pages`, label: "client" },
-      { endpoint: `/me/accounts`, label: "personal" },
-    ];
+    const sources = businessId
+      ? [
+          { endpoint: `/${businessId}/owned_pages`, label: "owned" },
+          { endpoint: `/${businessId}/client_pages`, label: "client" },
+          { endpoint: `/me/accounts`, label: "personal" },
+        ]
+      : [
+          { endpoint: `/me/accounts`, label: "personal" },
+        ];
 
     for (const source of sources) {
       try {

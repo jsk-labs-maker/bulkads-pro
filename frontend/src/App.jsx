@@ -269,16 +269,13 @@ export default function App() {
     const bizId = params.get("fb_biz_id");
     if (token) {
       localStorage.setItem("fb_token", token);
-      if (bizId) localStorage.setItem("fb_biz_id", bizId);
+      // Empty string is fine — backend falls back to /me/adaccounts.
+      localStorage.setItem("fb_biz_id", bizId || "");
       const name = params.get("fb_user_name");
       const email = params.get("fb_user_email");
       if (name) localStorage.setItem("fb_user_name", name);
       if (email) localStorage.setItem("fb_user_email", email);
       window.history.replaceState(null, "", window.location.pathname);
-      if (!bizId) {
-        alert("Logged in, but no Business Manager was found on your account. Go to business.facebook.com and create one, then try again.");
-        return;
-      }
       window.location.reload();
     }
   }, []);
@@ -450,11 +447,13 @@ export default function App() {
     const bizId = localStorage.getItem("fb_biz_id");
     const appId = localStorage.getItem("fb_app_id");
     const appSecret = localStorage.getItem("fb_app_secret");
-    if (token && bizId) {
-      setFbToken(token); setFbBizId(bizId);
+    // bizId may be empty for users without a Business Manager — backend
+    // falls back to /me/adaccounts in that case, so token alone is enough.
+    if (token) {
+      setFbToken(token); setFbBizId(bizId || "");
       if (appId) setFbAppId(appId);
       if (appSecret) setFbAppSecret(appSecret);
-      api.token = token; api.bizId = bizId;
+      api.token = token; api.bizId = bizId || "";
       setApiConnected(true);
       // Fetch data
       const init = async () => {

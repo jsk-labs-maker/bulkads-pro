@@ -16,14 +16,9 @@ module.exports = (req, res, next) => {
     });
   }
 
-  if (!businessId) {
-    return res.status(401).json({
-      success: false,
-      error: "Business ID required. Provide x-fb-business-id header or set FB_BUSINESS_ID.",
-    });
-  }
-
+  // Business ID is now optional — routes fall back to /me/* endpoints
+  // when missing (covers users without a Business Manager).
   req.fbToken = token;
-  req.fbBusinessId = businessId;
+  req.fbBusinessId = businessId || null;
   next();
 };
