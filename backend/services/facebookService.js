@@ -215,6 +215,22 @@ class FacebookService {
     return result.data?.data || [];
   }
 
+  // Count owned ad accounts for a business. Used to pick the "right"
+  // business after OAuth when the user has access to several.
+  async countOwnedAdAccounts(businessId, token) {
+    try {
+      const result = await axios.get(`${this.baseUrl}/${businessId}/owned_ad_accounts`, {
+        params: { fields: "id", limit: 1, summary: "true", access_token: token },
+        timeout: 10000,
+      });
+      const summary = result.data?.summary?.total_count;
+      if (typeof summary === "number") return summary;
+      return (result.data?.data || []).length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /* ══════════════════════════════════════
      AD ACCOUNTS
      ══════════════════════════════════════ */

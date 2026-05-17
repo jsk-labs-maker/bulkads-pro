@@ -267,14 +267,18 @@ export default function App() {
 
     const token = params.get("fb_token");
     const bizId = params.get("fb_biz_id");
-    if (token && bizId) {
+    if (token) {
       localStorage.setItem("fb_token", token);
-      localStorage.setItem("fb_biz_id", bizId);
+      if (bizId) localStorage.setItem("fb_biz_id", bizId);
       const name = params.get("fb_user_name");
       const email = params.get("fb_user_email");
       if (name) localStorage.setItem("fb_user_name", name);
       if (email) localStorage.setItem("fb_user_email", email);
       window.history.replaceState(null, "", window.location.pathname);
+      if (!bizId) {
+        alert("Logged in, but no Business Manager was found on your account. Go to business.facebook.com and create one, then try again.");
+        return;
+      }
       window.location.reload();
     }
   }, []);

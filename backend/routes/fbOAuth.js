@@ -112,15 +112,37 @@ router.get("/callback", async (req, res) => {
     let me = {};
     try { me = await facebookService.getMe(longToken); } catch (_) { /* non-fatal */ }
 
-    // 4. fetch businesses — auto-pick the first; user can switch later
+    // 4. fetch businesses, then pick the one with accessible ad accounts.
+    //    Naïvely picking businesses[0] breaks for users with multiple
+    //    businesses who granted assets in a non-first one.
     const businesses = await facebookService.getUserBusinesses(longToken);
-    const bizId = businesses[0]?.id || "";
+
+    let picked = null;
+    if (businesses.length === 1) {
+      picked = businesses[0];
+    } else if (businesses.length > 1) {
+      const counts = await Promise.all(
+        businesses.map(b => facebookService.countOwnedAdAccounts(b.id, longToken))
+      );
+      // Pick the business with the most owned ad accounts (likely the one
+      // the user granted access to). Fall back to the first if all are 0.
+      let bestIdx = 0;
+      for (let i = 1; i < counts.length; i++) if (counts[i] > counts[bestIdx]) bestIdx = i;
+      picked = businesses[bestIdx];
+      logger.info("Business selection", {
+        candidates: businesses.map((b, i) => ({ name: b.name, accounts: counts[i] })),
+        chose: picked.name,
+      });
+    }
+
+    const bizId = picked?.id || "";
 
     logger.info("OAuth success", {
       user: me.name || "?",
       email: me.email || "?",
       businesses: businesses.length,
-      picked: businesses[0]?.name || "(none)",
+      picked: picked?.name || "(none)",
+      bizId: bizId || "(empty)",
     });
 
     const hash = new URLSearchParams({
