@@ -798,10 +798,17 @@ export default function App() {
   const renderDashboard = () => (
     <div style={S.ct}>
       {!apiConnected && (
-        <div style={{ padding: "14px 18px", borderRadius: 10, background: "rgba(234,179,8,.04)", border: "1px solid rgba(234,179,8,.15)", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ padding: "14px 18px", borderRadius: 10, background: "rgba(234,179,8,.04)", border: "1px solid rgba(234,179,8,.15)", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <span style={{ fontSize: 20 }}>⚠️</span>
-          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 13, color: T.warn }}>Facebook API Not Connected</div><div style={{ fontSize: 12, color: T.txM }}>Go to Settings to connect your System User token</div></div>
-          <Btn variant="ghost" onClick={() => setPg("settings")}><Ic t="gear" sz={13} /> Connect</Btn>
+          <div style={{ flex: 1, minWidth: 200 }}><div style={{ fontWeight: 700, fontSize: 13, color: T.warn }}>Facebook API Not Connected</div><div style={{ fontSize: 12, color: T.txM }}>Sign in with Facebook to load your ad accounts</div></div>
+          <button
+            onClick={handleFacebookLogin}
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: "#1877F2", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: FNT }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+            Continue with Facebook
+          </button>
+          <Btn variant="ghost" onClick={() => setPg("settings")}><Ic t="gear" sz={13} /> Manual</Btn>
         </div>
       )}
 
@@ -884,9 +891,28 @@ export default function App() {
         </div>
       )}
 
+      {!apiConnected && (
+        <div style={S.card}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Sign in with Facebook</div>
+          <div style={{ fontSize: 12, color: T.txM, marginBottom: 14 }}>One-click login — we'll fetch your business + ad accounts automatically.</div>
+          <button
+            onClick={handleFacebookLogin}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, width: "100%", padding: "12px 0", background: "#1877F2", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: FNT }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+            Continue with Facebook
+          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0 4px", color: T.txD, fontSize: 11 }}>
+            <div style={{ flex: 1, height: 1, background: T.bd }} />
+            <span>OR USE A SYSTEM USER TOKEN</span>
+            <div style={{ flex: 1, height: 1, background: T.bd }} />
+          </div>
+        </div>
+      )}
+
       <div style={S.card}>
         <div style={{ padding: 14, background: "rgba(99,102,241,.04)", borderRadius: 10, border: "1px solid rgba(99,102,241,.1)", marginBottom: 18, fontSize: 12, color: "rgba(255,255,255,.5)", lineHeight: 1.8 }}>
-          <div style={{ fontWeight: 700, color: T.ac, marginBottom: 4, fontSize: 13 }}>Setup Steps:</div>
+          <div style={{ fontWeight: 700, color: T.ac, marginBottom: 4, fontSize: 13 }}>Setup Steps (manual token):</div>
           <div><b>1.</b> Go to business.facebook.com → Settings → System Users</div>
           <div><b>2.</b> Create System User (Admin) → Generate Token with <code style={{ color: T.ac2, fontFamily: MONO, fontSize: 11 }}>ads_management, ads_read, business_management</code></div>
           <div><b>3.</b> Copy Business ID from Business Settings → Business Info</div>
