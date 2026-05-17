@@ -186,6 +186,35 @@ class FacebookService {
     return result.data;
   }
 
+  async exchangeCodeForToken(code, redirectUri) {
+    const result = await axios.get(`${this.baseUrl}/oauth/access_token`, {
+      params: {
+        client_id: process.env.FB_APP_ID,
+        client_secret: process.env.FB_APP_SECRET,
+        redirect_uri: redirectUri,
+        code,
+      },
+      timeout: 15000,
+    });
+    return result.data;
+  }
+
+  async getMe(token) {
+    const result = await axios.get(`${this.baseUrl}/me`, {
+      params: { fields: "id,name,email", access_token: token },
+      timeout: 15000,
+    });
+    return result.data;
+  }
+
+  async getUserBusinesses(token) {
+    const result = await axios.get(`${this.baseUrl}/me/businesses`, {
+      params: { fields: "id,name", limit: 100, access_token: token },
+      timeout: 15000,
+    });
+    return result.data?.data || [];
+  }
+
   /* ══════════════════════════════════════
      AD ACCOUNTS
      ══════════════════════════════════════ */

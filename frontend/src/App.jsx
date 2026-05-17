@@ -250,29 +250,48 @@ export default function App() {
     notifTimer.current = setTimeout(() => setNotif(null), 3500);
   }, []);
 
-  /* ── Password Gate ── */
-  const DASHBOARD_PASSWORD = "adsmit2026";
-  const [unlocked, setUnlocked] = useState(false);
-  const [gatePass, setGatePass] = useState("");
-  const [gateError, setGateError] = useState("");
-
+  /* ── Facebook OAuth callback handler ── */
+  // Runs once on mount: if Facebook just redirected us back with credentials
+  // in the URL hash, store them in localStorage and reload so the auto-connect
+  // effect picks them up.
   useEffect(() => {
-    if (localStorage.getItem("dash_unlocked") === "true") setUnlocked(true);
+    if (!window.location.hash || window.location.hash.length < 2) return;
+    const params = new URLSearchParams(window.location.hash.slice(1));
+
+    const fbError = params.get("fb_oauth_error");
+    if (fbError) {
+      window.history.replaceState(null, "", window.location.pathname);
+      alert(`Facebook login failed: ${fbError}`);
+      return;
+    }
+
+    const token = params.get("fb_token");
+    const bizId = params.get("fb_biz_id");
+    if (token && bizId) {
+      localStorage.setItem("fb_token", token);
+      localStorage.setItem("fb_biz_id", bizId);
+      const name = params.get("fb_user_name");
+      const email = params.get("fb_user_email");
+      if (name) localStorage.setItem("fb_user_name", name);
+      if (email) localStorage.setItem("fb_user_email", email);
+      window.history.replaceState(null, "", window.location.pathname);
+      window.location.reload();
+    }
   }, []);
 
-  const handleUnlock = () => {
-    if (gatePass === DASHBOARD_PASSWORD) {
-      setUnlocked(true);
-      localStorage.setItem("dash_unlocked", "true");
-      setGateError("");
-    } else {
-      setGateError("Wrong password");
-    }
+  const handleFacebookLogin = () => {
+    const apiBase = window.location.hostname === "localhost"
+      ? "http://localhost:5001"
+      : "";
+    window.location.href = `${apiBase}/api/oauth/facebook/login`;
   };
 
-  const handleLock = () => {
-    setUnlocked(false);
-    localStorage.removeItem("dash_unlocked");
+  const handleDisconnect = () => {
+    localStorage.removeItem("fb_token");
+    localStorage.removeItem("fb_biz_id");
+    localStorage.removeItem("fb_user_name");
+    localStorage.removeItem("fb_user_email");
+    window.location.reload();
   };
 
   /* ── API Connection ── */
@@ -1786,31 +1805,6 @@ export default function App() {
      ══════════════════════════════════════ */
   const pages = { dashboard: renderDashboard, create: renderCreate, campaigns: renderCampaigns, templates: renderTemplates, accounts: renderAccounts, settings: renderSettings };
 
-  // Password Gate
-  if (!unlocked) {
-    return (
-      <div style={{ ...S.layout, alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <style>{CSS}</style>
-        <div style={{ width: "100%", maxWidth: 400, animation: "fi .3s ease" }}>
-          <div style={{ textAlign: "center", marginBottom: 32 }}>
-            <div style={{ width: 56, height: 56, borderRadius: 14, background: T.grad, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 900, color: "#fff", margin: "0 auto 16px" }}>B</div>
-            <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.5px" }}>BulkAds<span style={{ color: T.ac }}> Pro</span></div>
-            <div style={{ fontSize: 13, color: T.ac2, marginTop: 4, letterSpacing: ".6px", fontWeight: 700 }}>by Adsmit Solutions</div>
-          </div>
-          <div style={{ ...S.card, padding: 28 }}>
-            <div style={{ marginBottom: 18 }}>
-              <label style={S.lbl}>Enter Password</label>
-              <input style={{ ...S.inp, textAlign: "center", fontSize: 16, padding: "12px 16px", letterSpacing: "2px" }} type="password" value={gatePass} onChange={e => setGatePass(e.target.value)} placeholder="••••••••" autoFocus onKeyDown={e => e.key === "Enter" && handleUnlock()} />
-            </div>
-            {gateError && <div style={{ padding: 10, borderRadius: 8, background: "rgba(239,68,68,.06)", border: "1px solid rgba(239,68,68,.15)", color: T.err, fontSize: 12, marginBottom: 14, textAlign: "center" }}>{gateError}</div>}
-            <Btn onClick={handleUnlock} style={{ width: "100%", justifyContent: "center", padding: "12px 0", fontSize: 14 }}>Unlock Dashboard</Btn>
-          </div>
-          <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: T.txD }}>Bulk Facebook Ads Publishing Platform</div>
-        </div>
-      </div>
-    );
-  }
-
   // Main Dashboard
   return (
     <div style={S.layout}>
@@ -1841,7 +1835,7 @@ export default function App() {
           {sbOpen && (
             <div style={{ padding: "6px 12px", fontSize: 11, color: T.txM, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontWeight: 600, color: T.ac2 }}>Adsmit Solutions</span>
-              <span style={{ cursor: "pointer", color: T.err, fontSize: 10, fontWeight: 600 }} onClick={handleLock}>Lock</span>
+              {apiConnected && <span style={{ cursor: "pointer", color: T.err, fontSize: 10, fontWeight: 600 }} onClick={handleDisconnect}>Logout</span>}
             </div>
           )}
           <button style={{ display: "flex", alignItems: "center", gap: 10, padding: sbOpen ? "8px 12px" : "8px 0", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 500, background: "transparent", color: T.txM, border: "none", fontFamily: FNT, width: "100%", justifyContent: sbOpen ? "flex-start" : "center" }} onClick={() => setSbOpen(!sbOpen)}>

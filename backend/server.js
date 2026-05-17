@@ -17,6 +17,7 @@ const campaignRoutes = require("./routes/campaigns");
 const analyticsRoutes = require("./routes/analytics");
 const dbRoutes = require("./routes/db");
 const userAuthRoutes = require("./routes/userAuth");
+const fbOAuthRoutes = require("./routes/fbOAuth");
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -107,6 +108,9 @@ app.get("/api/health", (req, res) => {
    ══════════════════════════════════════ */
 // User login/signup — NO auth required
 app.use("/api/user", authLimiter, userAuthRoutes);
+
+// Facebook OAuth login — NO auth required (this IS the auth)
+app.use("/api/oauth/facebook", authLimiter, fbOAuthRoutes);
 
 // Facebook API routes — require FB token auth
 app.use("/api/auth", authLimiter, authMiddleware, authRoutes);
