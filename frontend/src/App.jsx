@@ -716,7 +716,7 @@ export default function App() {
 
     const config = {
       name: cName, objective: cObj, budget: parseFloat(cBudget), budget_type: cBudgetType,
-      budget_mode: cBudgetMode, bid_strategy: cBidStrategy, publish_status: "PAUSED", page_id: cPageId,
+      budget_mode: cBudgetMode, bid_strategy: cBidStrategy, publish_status: "ACTIVE", page_id: cPageId,
       account_ids: selAccounts, ad_sets: adSetsForApi, ad_variations: adVariations,
       pixel_id: cPixelMode === "specific" && cPixelId ? cPixelId : undefined,
     };
