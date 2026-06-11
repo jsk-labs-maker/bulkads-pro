@@ -332,6 +332,12 @@ export default function App() {
   const [vaultBusy, setVaultBusy] = useState(false);
   const [vaultError, setVaultError] = useState("");
 
+  /* ── Bulk token tester ── */
+  const [bulkInput, setBulkInput] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResults, setBulkResults] = useState(null);
+  const [showBulkTester, setShowBulkTester] = useState(false);
+
   /* ── Data ── */
   const [accounts, setAccounts] = useState([]);
   const [fbPages, setFbPages] = useState([]);
@@ -501,6 +507,44 @@ export default function App() {
       }
     } catch (e) { flash(e.message, "error"); }
   }, [loadVault, flash]);
+
+  const runBulkTest = useCallback(async () => {
+    if (!bulkInput.trim()) { flash("Paste one or more tokens first", "error"); return; }
+    setBulkBusy(true); setBulkResults(null);
+    try {
+      const r = await api.post("/api/tokens/test", { tokens: bulkInput });
+      if (r.success) setBulkResults(r);
+    } catch (e) { flash(e.message, "error"); }
+    setBulkBusy(false);
+  }, [bulkInput, flash]);
+
+  const addReadyTokens = useCallback(async () => {
+    if (!bulkResults) return;
+    const ready = bulkResults.results.filter(r => r.launchReady);
+    if (ready.length === 0) return;
+    setBulkBusy(true);
+    // Re-derive raw tokens from the textarea by matching previews would be
+    // fragile; instead just re-submit each ready token line through add.
+    const lines = bulkInput.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+    let added = 0;
+    for (const tok of lines) {
+      const preview = tok.length > 12 ? `${tok.slice(0, 6)}…${tok.slice(-4)}` : "•••";
+      if (!ready.some(r => r.tokenPreview === preview)) continue;
+      try {
+        const r = await api.post("/api/tokens", { token: tok });
+        if (r.success) {
+          const ids = getVaultIds();
+          if (!ids.includes(r.token.id)) saveVaultIds([...ids, r.token.id]);
+          added++;
+        }
+      } catch (_) {}
+    }
+    await loadVault();
+    setApiConnected(true);
+    await Promise.all([fetchVaultData(), loadTemplates(), loadCampaigns(), loadGroups()]);
+    setBulkBusy(false);
+    flash(`Added ${added} working token${added === 1 ? "" : "s"} to the vault`);
+  }, [bulkResults, bulkInput, loadVault, fetchVaultData, loadTemplates, loadCampaigns, loadGroups, flash]);
 
   const connectApi = useCallback(async () => {
     if (!fbToken || !fbBizId) { setApiError("Token and Business ID are required"); return; }
@@ -1008,6 +1052,45 @@ export default function App() {
           <Btn onClick={addVaultToken} disabled={vaultBusy}>{vaultBusy ? "Validating..." : "Add Token"}</Btn>
         </div>
         {vaultError && <div style={{ padding: 10, borderRadius: 8, background: "rgba(239,68,68,.06)", border: "1px solid rgba(239,68,68,.15)", color: T.err, fontSize: 12, marginBottom: 12 }}>{vaultError}</div>}
+        <div style={{ marginTop: 4, marginBottom: vaultTokens.length > 0 ? 14 : 0 }}>
+          <span onClick={() => setShowBulkTester(v => !v)} style={{ fontSize: 12, color: T.ac, cursor: "pointer", fontWeight: 600 }}>
+            {showBulkTester ? "− Hide bulk token tester" : "+ Test many tokens at once"}
+          </span>
+        </div>
+
+        {showBulkTester && (
+          <div style={{ marginBottom: 14, padding: 14, background: "rgba(255,255,255,.02)", borderRadius: 10, border: `1px solid ${T.bd}` }}>
+            <div style={{ fontSize: 12, color: T.txM, marginBottom: 8 }}>Paste tokens (one per line, or comma/space separated). Nothing is stored until you add the working ones.</div>
+            <textarea style={{ ...S.ta, fontFamily: MONO, fontSize: 11, minHeight: 90 }} value={bulkInput} onChange={e => setBulkInput(e.target.value)} placeholder={"EAAxxxx...\nEAAyyyy...\nEAAzzzz..."} />
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <Btn onClick={runBulkTest} disabled={bulkBusy}>{bulkBusy ? "Testing..." : "Test Tokens"}</Btn>
+              {bulkResults && bulkResults.summary.ready > 0 && (
+                <Btn variant="ghost" onClick={addReadyTokens} disabled={bulkBusy}>Add {bulkResults.summary.ready} working</Btn>
+              )}
+            </div>
+            {bulkResults && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                  <Badge color={T.ok}>{bulkResults.summary.ready} ready</Badge>
+                  <Badge color={T.warn}>{bulkResults.summary.alive_no_accounts} alive, no accounts</Badge>
+                  <Badge color={T.err}>{bulkResults.summary.dead} dead</Badge>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 240, overflowY: "auto" }}>
+                  {bulkResults.results.map((r, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", background: "rgba(255,255,255,.02)", borderRadius: 8, fontSize: 11.5 }}>
+                      <Dot status={r.launchReady ? "active" : r.alive ? "paused" : "disabled"} />
+                      <span style={{ fontFamily: MONO, color: T.txM, minWidth: 90 }}>{r.tokenPreview}</span>
+                      <span style={{ flex: 1, color: r.launchReady ? T.ok : r.alive ? T.warn : T.err }}>{r.summary}</span>
+                      {r.fbUserName && <span style={{ color: T.txM }}>{r.fbUserName}</span>}
+                      {r.alive && <span style={{ color: T.txM }}>{r.accountCount} acc</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {vaultTokens.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {vaultTokens.map(t => (

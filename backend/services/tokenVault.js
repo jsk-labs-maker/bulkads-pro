@@ -68,10 +68,76 @@ async function inspectToken(token) {
 }
 
 /**
+ * Diagnose a token WITHOUT storing it. Returns a precise reason so a user
+ * triaging a pile of tokens can tell "dead/expired" apart from "alive but
+ * no ad accounts" apart from "rate-limited, try again".
+ */
+async function diagnoseToken(token) {
+  const t = (token || "").trim();
+  if (t.length < 20) return { ok: false, reason: "malformed", message: "Too short to be a Meta token" };
+
+  // Step 1: identity. This is the cheapest call that proves the token is live.
+  let me;
+  try {
+    me = await facebookService.getMe(t);
+  } catch (e) {
+    const fb = e.response?.data?.error;
+    const code = fb?.code;
+    const sub = fb?.error_subcode;
+    const msg = fb?.message || e.message;
+    let reason = "invalid";
+    if (code === 190 && sub === 460) reason = "password_changed";   // session invalidated
+    else if (code === 190 && sub === 463) reason = "expired";        // token expired
+    else if (code === 190 && sub === 467) reason = "invalidated";    // user logged out / deauthorized
+    else if (code === 190) reason = "invalid";
+    else if ([4, 17, 32].includes(code)) reason = "rate_limited";
+    else if (e.code === "ECONNABORTED" || /timeout/i.test(msg)) reason = "timeout";
+    return { ok: false, reason, code, subcode: sub, message: msg };
+  }
+
+  // Step 2: scopes — needed to know if it can actually manage ads.
+  let scopes = [];
+  try {
+    const r = await facebookService.graphRequest("GET", "/me/permissions", { limit: 200 }, t);
+    scopes = (r.data || []).filter(p => p.status === "granted").map(p => p.permission);
+  } catch (_) { /* non-fatal */ }
+  const hasAdsScope = scopes.length === 0 || scopes.includes("ads_management"); // empty = couldn't read, don't penalize
+
+  // Step 3: reachable ad accounts.
+  let accounts = [];
+  try { accounts = await facebookService.getAllAdAccounts(null, t); } catch (_) { /* keep empty */ }
+
+  return {
+    ok: true,
+    reason: accounts.length === 0 ? "no_ad_accounts" : (hasAdsScope ? "ready" : "missing_ads_scope"),
+    fbUserId: me.id || "",
+    fbUserName: me.name || "",
+    scopes,
+    hasAdsScope,
+    accountCount: accounts.length,
+    accountIds: accounts.map(a => normalizeActId(a.id || a.account_id)),
+  };
+}
+
+/**
+ * Best-effort: turn a short-lived user token into a long-lived (~60-day)
+ * one. Only works when the token was minted by THIS app (FB_APP_ID); for
+ * tokens from other apps the exchange fails and we keep the original.
+ */
+async function tryExtendToken(token) {
+  try {
+    const r = await facebookService.exchangeForLongLivedToken(token);
+    if (r?.access_token) return r.access_token;
+  } catch (_) { /* different app or already long-lived — keep original */ }
+  return token;
+}
+
+/**
  * Validate + store a token. Re-adding a token for the same FB user updates
  * the existing entry instead of creating a duplicate.
  */
 async function addToken(token, label = "") {
+  token = await tryExtendToken(token.trim());
   const info = await inspectToken(token);
 
   const existing = info.fbUserId
@@ -137,4 +203,4 @@ function tokenForAccount(records, accountId) {
   return null;
 }
 
-module.exports = { addToken, checkToken, resolveIds, tokenForAccount, toPublic, normalizeActId };
+module.exports = { addToken, checkToken, diagnoseToken, resolveIds, tokenForAccount, toPublic, normalizeActId };

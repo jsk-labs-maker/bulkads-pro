@@ -36,6 +36,66 @@ router.post("/", async (req, res) => {
   }
 });
 
+// Human-readable summary for each diagnosis reason.
+const REASON_LABEL = {
+  ready: "Ready to launch ads",
+  no_ad_accounts: "Valid, but no ad accounts on this token",
+  missing_ads_scope: "Valid, but missing ads_management permission",
+  malformed: "Not a valid token format",
+  password_changed: "Dead — password changed / session invalidated",
+  expired: "Dead — token expired",
+  invalidated: "Dead — user logged out or deauthorized the app",
+  invalid: "Dead — rejected by Meta",
+  rate_limited: "Could not check — Meta rate-limited the request, retry",
+  timeout: "Could not check — request timed out, retry",
+};
+
+/**
+ * POST /api/tokens/test — Diagnose a batch of tokens WITHOUT storing any.
+ * Body: { tokens: ["EAA...", ...] }  OR  { tokens: "EAA...\nEAA..." }
+ * Returns a per-token verdict so the user can triage which ones are alive.
+ */
+router.post("/test", async (req, res) => {
+  let list = req.body?.tokens;
+  if (typeof list === "string") list = list.split(/[\s,]+/);
+  if (!Array.isArray(list)) return res.status(400).json({ success: false, error: "Provide tokens as an array or newline-separated string" });
+
+  const tokens = [...new Set(list.map(s => (s || "").trim()).filter(Boolean))].slice(0, 100);
+  if (tokens.length === 0) return res.status(400).json({ success: false, error: "No tokens provided" });
+
+  // Pace requests in small batches so we don't trip Meta's rate limiter
+  // (which would make live tokens look dead).
+  const results = [];
+  const BATCH = 4;
+  for (let i = 0; i < tokens.length; i += BATCH) {
+    const slice = tokens.slice(i, i + BATCH);
+    const diagnosed = await Promise.all(slice.map(async (tok) => {
+      const d = await vault.diagnoseToken(tok);
+      return {
+        tokenPreview: tok.length > 12 ? `${tok.slice(0, 6)}…${tok.slice(-4)}` : "•••",
+        alive: d.ok,
+        launchReady: d.reason === "ready",
+        reason: d.reason,
+        summary: REASON_LABEL[d.reason] || d.message || d.reason,
+        fbUserName: d.fbUserName || "",
+        accountCount: d.accountCount || 0,
+        message: d.message || "",
+      };
+    }));
+    results.push(...diagnosed);
+    if (i + BATCH < tokens.length) await new Promise(r => setTimeout(r, 1200));
+  }
+
+  const summary = {
+    total: results.length,
+    ready: results.filter(r => r.launchReady).length,
+    alive_no_accounts: results.filter(r => r.alive && !r.launchReady).length,
+    dead: results.filter(r => !r.alive).length,
+  };
+  logger.info("Batch token test", summary);
+  res.json({ success: true, summary, results });
+});
+
 /**
  * GET /api/tokens — List the caller's vault entries (tokens masked).
  */
