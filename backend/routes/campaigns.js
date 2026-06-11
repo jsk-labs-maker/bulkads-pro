@@ -3,8 +3,14 @@ const router = express.Router();
 const multer = require("multer");
 const axios = require("axios");
 const facebookService = require("../services/facebookService");
+const vault = require("../services/tokenVault");
 const { broadcast } = require("../websocket/wsServer");
 const logger = require("../utils/logger");
+
+// Vault entries that cover an account take priority — they're the token
+// that actually owns it. Otherwise fall back to the request-level token.
+const tokenFor = (req, accountId) =>
+  vault.tokenForAccount(req.vaultRecords || [], accountId) || req.fbToken;
 
 // Multer config — disk storage for large files, memory for reasonable ones
 const upload = multer({
@@ -103,7 +109,7 @@ router.post("/publish", upload.array("creatives", 10), async (req, res) => {
     for (let i = 0; i < accountIds.length; i += concurrency) {
       const batch = accountIds.slice(i, i + concurrency);
       const batchResults = await Promise.allSettled(
-        batch.map(accId => facebookService.publishToSingleAccount(accId, config, req.fbToken))
+        batch.map(accId => facebookService.publishToSingleAccount(accId, config, tokenFor(req, accId)))
       );
 
       for (let j = 0; j < batchResults.length; j++) {
@@ -192,7 +198,7 @@ router.post("/publish-one", upload.array("creatives", 10), async (req, res) => {
       }
     }
 
-    const result = await facebookService.publishToSingleAccount(config.account_id, config, req.fbToken);
+    const result = await facebookService.publishToSingleAccount(config.account_id, config, tokenFor(req, config.account_id));
     res.json({ success: true, result });
   } catch (error) {
     logger.error("Single publish failed", { error: error.message });

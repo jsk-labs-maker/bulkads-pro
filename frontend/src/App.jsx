@@ -16,10 +16,12 @@ const API = "";
 const api = {
   token: null,
   bizId: null,
+  tokenIds: [],
   headers() {
     const h = { "Content-Type": "application/json" };
     if (this.token) h["x-fb-access-token"] = this.token;
     if (this.bizId) h["x-fb-business-id"] = this.bizId;
+    if (this.tokenIds.length) h["x-fb-token-ids"] = this.tokenIds.join(",");
     return h;
   },
   async get(path) {
@@ -50,6 +52,7 @@ const api = {
     const h = {};
     if (this.token) h["x-fb-access-token"] = this.token;
     if (this.bizId) h["x-fb-business-id"] = this.bizId;
+    if (this.tokenIds.length) h["x-fb-token-ids"] = this.tokenIds.join(",");
     const r = await fetch(`${API}${path}`, { method: "POST", headers: h, body: formData });
     if (!r.ok) {
       const data = await r.json().catch(() => ({}));
@@ -66,6 +69,10 @@ const api = {
     return r.json();
   },
 };
+
+/* Vault token IDs persisted in localStorage — UUIDs only, never raw tokens */
+const getVaultIds = () => { try { return JSON.parse(localStorage.getItem("vault_token_ids") || "[]"); } catch (_) { return []; } };
+const saveVaultIds = (ids) => { localStorage.setItem("vault_token_ids", JSON.stringify(ids)); api.tokenIds = ids; };
 
 /* ══════════════════════════════════════
    CONSTANTS
@@ -275,8 +282,20 @@ export default function App() {
       const email = params.get("fb_user_email");
       if (name) localStorage.setItem("fb_user_name", name);
       if (email) localStorage.setItem("fb_user_email", email);
-      window.history.replaceState(null, "", window.location.pathname);
-      window.location.reload();
+      // Also register in the token vault so it participates in multi-token publishes
+      fetch(`${API}/api/tokens`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, label: name || "" }) })
+        .then(r => r.json())
+        .then(r => {
+          if (r.success && r.token?.id) {
+            const ids = getVaultIds();
+            if (!ids.includes(r.token.id)) saveVaultIds([...ids, r.token.id]);
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          window.history.replaceState(null, "", window.location.pathname);
+          window.location.reload();
+        });
     }
   }, []);
 
@@ -305,6 +324,13 @@ export default function App() {
   const [apiConnected, setApiConnected] = useState(false);
   const [apiLoading, setApiLoading] = useState(false);
   const [apiError, setApiError] = useState("");
+
+  /* ── Token Vault ── */
+  const [vaultTokens, setVaultTokens] = useState([]);
+  const [vaultInput, setVaultInput] = useState("");
+  const [vaultLabel, setVaultLabel] = useState("");
+  const [vaultBusy, setVaultBusy] = useState(false);
+  const [vaultError, setVaultError] = useState("");
 
   /* ── Data ── */
   const [accounts, setAccounts] = useState([]);
@@ -378,7 +404,9 @@ export default function App() {
   const fetchAccounts = useCallback(async () => {
     setAccLoading(true);
     try {
-      const r = await api.get("/api/accounts");
+      // Vault active → aggregate across all stored tokens
+      const path = api.tokenIds.length > 0 ? "/api/tokens/accounts" : "/api/accounts";
+      const r = await api.get(path);
       if (r.success) { setAccounts(r.accounts); setLastSync(new Date().toLocaleTimeString()); }
     } catch (e) { flash("Failed to load accounts: " + e.message, "error"); }
     setAccLoading(false);
@@ -405,6 +433,74 @@ export default function App() {
   const loadGroups = useCallback(async () => {
     try { const r = await api.get("/api/db/groups"); if (r.success) setSavedGroups(r.groups); } catch (_) {}
   }, []);
+
+  /* ── Token Vault API ── */
+  const fetchVaultData = useCallback(async () => {
+    setAccLoading(true);
+    try {
+      const [accR, pgR] = await Promise.all([api.get("/api/tokens/accounts"), api.get("/api/tokens/pages")]);
+      if (accR.success) { setAccounts(accR.accounts); setLastSync(new Date().toLocaleTimeString()); }
+      if (pgR.success && pgR.pages) { setFbPages(pgR.pages); if (pgR.pages.length > 0) setCPageId(prev => prev || pgR.pages[0].id); }
+    } catch (e) { flash("Failed to load accounts: " + e.message, "error"); }
+    setAccLoading(false);
+  }, [flash]);
+
+  const loadVault = useCallback(async () => {
+    const ids = getVaultIds();
+    api.tokenIds = ids;
+    if (ids.length === 0) { setVaultTokens([]); return []; }
+    try {
+      const r = await api.get("/api/tokens");
+      if (r.success) {
+        setVaultTokens(r.tokens);
+        // Prune IDs that were deleted server-side
+        if (r.tokens.length !== ids.length) saveVaultIds(r.tokens.map(t => t.id));
+        return r.tokens;
+      }
+    } catch (_) {}
+    return [];
+  }, []);
+
+  const addVaultToken = useCallback(async () => {
+    if (!vaultInput.trim()) { setVaultError("Paste an access token first"); return; }
+    setVaultBusy(true); setVaultError("");
+    try {
+      const r = await api.post("/api/tokens", { token: vaultInput.trim(), label: vaultLabel.trim() });
+      if (r.success) {
+        const ids = getVaultIds();
+        if (!ids.includes(r.token.id)) saveVaultIds([...ids, r.token.id]);
+        setVaultInput(""); setVaultLabel("");
+        await loadVault();
+        setApiConnected(true);
+        await Promise.all([fetchVaultData(), loadTemplates(), loadCampaigns(), loadGroups()]);
+        flash(`Token added — ${r.token.fbUserName || "verified"}, ${r.token.accountCount} ad accounts`);
+      }
+    } catch (e) { setVaultError(e.message); }
+    setVaultBusy(false);
+  }, [vaultInput, vaultLabel, loadVault, fetchVaultData, loadTemplates, loadCampaigns, loadGroups, flash]);
+
+  const removeVaultToken = useCallback(async (id) => {
+    try { await api.del(`/api/tokens/${id}`); } catch (_) {}
+    saveVaultIds(getVaultIds().filter(x => x !== id));
+    const left = await loadVault();
+    if (left.length === 0 && !localStorage.getItem("fb_token")) {
+      setApiConnected(false); setAccounts([]); setFbPages([]);
+    } else {
+      await fetchVaultData();
+    }
+    flash("Token removed", "info");
+  }, [loadVault, fetchVaultData, flash]);
+
+  const checkVaultToken = useCallback(async (id) => {
+    try {
+      const r = await api.post(`/api/tokens/${id}/check`, {});
+      if (r.success) {
+        await loadVault();
+        if (r.token.status === "valid") flash(`Token valid — ${r.token.accountCount} accounts`);
+        else flash(`Token invalid: ${r.token.lastError}`, "error");
+      }
+    } catch (e) { flash(e.message, "error"); }
+  }, [loadVault, flash]);
 
   const connectApi = useCallback(async () => {
     if (!fbToken || !fbBizId) { setApiError("Token and Business ID are required"); return; }
@@ -433,16 +529,27 @@ export default function App() {
   }, [fbToken, fbBizId, fbAppId, fbAppSecret, fetchAccounts, fetchPages, loadTemplates, loadCampaigns, loadGroups, flash]);
 
   const disconnectApi = useCallback(() => {
-    api.token = null; api.bizId = null;
-    setApiConnected(false); setAccounts([]); setFbPages([]);
+    api.token = null; api.bizId = null; api.tokenIds = [];
+    setApiConnected(false); setAccounts([]); setFbPages([]); setVaultTokens([]);
     setFbToken(""); setFbBizId(""); setFbAppId(""); setFbAppSecret("");
     localStorage.removeItem("fb_token"); localStorage.removeItem("fb_biz_id");
     localStorage.removeItem("fb_app_id"); localStorage.removeItem("fb_app_secret");
+    localStorage.removeItem("vault_token_ids");
     flash("Disconnected", "info");
   }, [flash]);
 
   // Auto-connect from localStorage
   useEffect(() => {
+    // Vault tokens take priority — accounts/pages aggregate across all of them
+    const vaultIds = getVaultIds();
+    if (vaultIds.length > 0) {
+      api.tokenIds = vaultIds;
+      setApiConnected(true);
+      loadVault();
+      Promise.all([fetchVaultData(), loadTemplates(), loadCampaigns(), loadGroups()]).catch(() => {});
+      return;
+    }
+
     const token = localStorage.getItem("fb_token");
     const bizId = localStorage.getItem("fb_biz_id");
     const appId = localStorage.getItem("fb_app_id");
@@ -881,6 +988,44 @@ export default function App() {
           <div style={{ flex: 1 }}><div style={S.cardT}>Facebook Marketing API</div><div style={{ fontSize: 12, color: T.txM }}>Connect via System User Access Token</div></div>
           {apiConnected && <Badge color={T.ok}>Connected</Badge>}
         </div>
+      </div>
+
+      {/* ── Token Vault ── */}
+      <div style={S.card}>
+        <div style={S.cardT}>Token Vault</div>
+        <div style={{ fontSize: 12, color: T.txM, marginBottom: 14 }}>
+          Paste any Meta access token to launch ads with it. Accounts and pages are detected automatically, and bulk publishes use the right token for each ad account. Add as many tokens as you need.
+        </div>
+        <div style={{ ...S.row, marginBottom: 12, alignItems: "flex-end" }}>
+          <div style={S.col(2)}>
+            <label style={S.lbl}>Access Token</label>
+            <input type="password" style={{ ...S.inp, fontFamily: MONO }} value={vaultInput} onChange={e => setVaultInput(e.target.value)} placeholder="EAAxxxxxxx..." />
+          </div>
+          <div style={S.col()}>
+            <label style={S.lbl}>Label (optional)</label>
+            <input style={S.inp} value={vaultLabel} onChange={e => setVaultLabel(e.target.value)} placeholder="e.g. Profile 3 / BM-Main" />
+          </div>
+          <Btn onClick={addVaultToken} disabled={vaultBusy}>{vaultBusy ? "Validating..." : "Add Token"}</Btn>
+        </div>
+        {vaultError && <div style={{ padding: 10, borderRadius: 8, background: "rgba(239,68,68,.06)", border: "1px solid rgba(239,68,68,.15)", color: T.err, fontSize: 12, marginBottom: 12 }}>{vaultError}</div>}
+        {vaultTokens.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {vaultTokens.map(t => (
+              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "rgba(255,255,255,.02)", borderRadius: 10, border: `1px solid ${T.bd}` }}>
+                <Dot status={t.status === "valid" ? "active" : "disabled"} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{t.label || t.fbUserName || "Token"}</div>
+                  <div style={{ fontSize: 11, color: T.txM, fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {t.tokenPreview}{t.fbUserName ? ` · ${t.fbUserName}` : ""}{t.businessName ? ` · ${t.businessName}` : ""}{t.status === "invalid" && t.lastError ? ` · ${t.lastError}` : ""}
+                  </div>
+                </div>
+                <Badge color={t.status === "valid" ? T.ok : T.err}>{t.status === "valid" ? `${t.accountCount} accounts` : "Invalid"}</Badge>
+                <Btn variant="ghost" onClick={() => checkVaultToken(t.id)} style={{ padding: "7px 10px" }}><Ic t="refresh" sz={13} /></Btn>
+                <Btn variant="danger" onClick={() => removeVaultToken(t.id)} style={{ padding: "7px 10px" }}><Ic t="trash" sz={13} /></Btn>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {apiConnected && (
@@ -1563,7 +1708,7 @@ export default function App() {
                   <div style={{ width: 18, height: 18, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", background: sel ? T.ac : "rgba(255,255,255,.03)", border: sel ? "none" : `1.5px solid rgba(255,255,255,.1)`, color: "#fff", fontSize: 10 }}>
                     {sel && <Ic t="check" sz={9} />}
                   </div>
-                  <div><div style={{ fontSize: 12.5, fontWeight: 600 }}>{a.name}</div><div style={{ fontSize: 10, color: T.txD, fontFamily: MONO }}>{a.id}</div></div>
+                  <div><div style={{ fontSize: 12.5, fontWeight: 600 }}>{a.name}{a.tokenLabel && <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 600, color: T.ac, background: "rgba(99,102,241,.1)", padding: "1px 6px", borderRadius: 8 }}>{a.tokenLabel}</span>}</div><div style={{ fontSize: 10, color: T.txD, fontFamily: MONO }}>{a.id}</div></div>
                   <div style={{ fontSize: 11, color: T.txM }}>{a.business_name || "—"}</div>
                   <div style={{ fontSize: 11, fontFamily: MONO, color: T.txM }}>${parseFloat(a.amount_spent || 0).toLocaleString()}</div>
                   <div><Dot status={a.status} /><span style={{ fontSize: 11, color: T.txM }}>{a.status}</span></div>

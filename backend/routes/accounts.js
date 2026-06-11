@@ -1,7 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const facebookService = require("../services/facebookService");
+const vault = require("../services/tokenVault");
 const logger = require("../utils/logger");
+
+const tokenFor = (req, accountId) =>
+  vault.tokenForAccount(req.vaultRecords || [], accountId) || req.fbToken;
 
 /**
  * GET /api/accounts — Fetch all ad accounts
@@ -50,7 +54,7 @@ router.get("/pages", async (req, res) => {
 router.get("/:id/pixels", async (req, res) => {
   try {
     const accId = req.params.id.startsWith("act_") ? req.params.id : `act_${req.params.id}`;
-    const result = await facebookService.graphRequest("GET", `/${accId}/adspixels`, { fields: "id,name", limit: 10 }, req.fbToken);
+    const result = await facebookService.graphRequest("GET", `/${accId}/adspixels`, { fields: "id,name", limit: 10 }, tokenFor(req, accId));
     res.json({ success: true, pixels: result.data || [] });
   } catch (error) {
     // Return empty pixels on error — account might not have pixels
@@ -63,7 +67,7 @@ router.get("/:id/pixels", async (req, res) => {
  */
 router.get("/:id", async (req, res) => {
   try {
-    const account = await facebookService.getAdAccountDetails(req.params.id, req.fbToken);
+    const account = await facebookService.getAdAccountDetails(req.params.id, tokenFor(req, req.params.id));
     res.json({ success: true, account });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

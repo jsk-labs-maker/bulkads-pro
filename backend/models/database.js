@@ -75,6 +75,21 @@ const User = sequelize.define("User", {
   lastLogin: DataTypes.DATE,
 });
 
+const FbToken = sequelize.define("FbToken", {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  label: { type: DataTypes.STRING, defaultValue: "" },
+  token: { type: DataTypes.TEXT, allowNull: false },
+  fbUserId: { type: DataTypes.STRING, defaultValue: "" },
+  fbUserName: { type: DataTypes.STRING, defaultValue: "" },
+  businessId: { type: DataTypes.STRING, defaultValue: "" },
+  businessName: { type: DataTypes.STRING, defaultValue: "" },
+  status: { type: DataTypes.STRING, defaultValue: "valid" }, // valid | invalid
+  lastError: { type: DataTypes.STRING, defaultValue: "" },
+  accountIds: { type: DataTypes.JSON, defaultValue: [] }, // ["act_123", ...]
+  accountCount: { type: DataTypes.INTEGER, defaultValue: 0 },
+  lastCheckedAt: DataTypes.DATE,
+});
+
 const Credential = sequelize.define("Credential", {
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
   businessId: { type: DataTypes.STRING, unique: true, allowNull: false },
@@ -128,4 +143,4 @@ async function closeDatabase() {
   }
 }
 
-module.exports = { sequelize, User, Campaign, Template, AccountGroup, Credential, initDatabase, closeDatabase };
+module.exports = { sequelize, User, Campaign, Template, AccountGroup, Credential, FbToken, initDatabase, closeDatabase };

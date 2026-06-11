@@ -18,6 +18,7 @@ const analyticsRoutes = require("./routes/analytics");
 const dbRoutes = require("./routes/db");
 const userAuthRoutes = require("./routes/userAuth");
 const fbOAuthRoutes = require("./routes/fbOAuth");
+const tokenRoutes = require("./routes/tokens");
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -45,7 +46,7 @@ app.use(cors({
     cb(new Error("Not allowed by CORS"));
   },
   methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-fb-access-token", "x-fb-business-id"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-fb-access-token", "x-fb-business-id", "x-fb-token-ids"],
   credentials: true,
 }));
 
@@ -111,6 +112,9 @@ app.use("/api/user", authLimiter, userAuthRoutes);
 
 // Facebook OAuth login — NO auth required (this IS the auth)
 app.use("/api/oauth/facebook", authLimiter, fbOAuthRoutes);
+
+// Token vault — adding a token IS the auth; other ops need vault IDs
+app.use("/api/tokens", authLimiter, tokenRoutes);
 
 // Facebook API routes — require FB token auth
 app.use("/api/auth", authLimiter, authMiddleware, authRoutes);
